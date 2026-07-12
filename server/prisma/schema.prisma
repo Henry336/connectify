@@ -24,6 +24,7 @@ model Room {
   guestsCanControl Boolean  @default(true)
   guestsCanAdd     Boolean  @default(true)
   maxSongsPerUser  Int      @default(5)
+  discoverable     Boolean  @default(false)
   revision         Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -120,4 +121,16 @@ model ChatMessage {
 
   @@index([roomId, createdAt])
   @@index([trackId, position])
+}
+
+model SearchCache {
+  key       String   @id
+  query     String
+  pageToken String?
+  response  Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
 }

@@ -1,0 +1,11 @@
+{
+  "name": "Connectify",
+  "short_name": "Connectify",
+  "description": "Listen and watch together in synchronized rooms.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0910",
+  "theme_color": "#0a0910",
+  "icons": [{ "src": "/connectify.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }],
+  "share_target": { "action": "/share", "method": "GET", "enctype": "application/x-www-form-urlencoded", "params": { "title": "title", "text": "text", "url": "url" } }
+}

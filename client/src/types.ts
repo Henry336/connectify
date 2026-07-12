@@ -68,6 +68,7 @@ export type Room = {
   guestsCanControl: boolean;
   guestsCanAdd: boolean;
   maxSongsPerUser: number;
+  discoverable: boolean;
   revision: number;
   createdAt: string;
   serverTime: string;
@@ -80,3 +81,13 @@ export type Room = {
 };
 
 export type Person = { id: string; name: string; avatar: string; role: "host" | "guest" };
+
+export type SearchItem = {
+  providerId: string;
+  title: string;
+  artist: string;
+  thumbnail: string | null;
+  url: string;
+  duration: number | null;
+  source: "connectify" | "youtube";
+};

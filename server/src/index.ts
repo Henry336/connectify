@@ -7,6 +7,7 @@ import { Server, type Socket } from "socket.io";
 import { z } from "zod";
 import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
+import { searchConnectifyLibrary, searchYouTube } from "./search-service.js";
 import { resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -49,6 +50,29 @@ app.get("/api/rooms/:code", asyncRoute(async (req, res) => {
   const room = await roomSnapshot(String(req.params.code));
   if (!room) return res.status(404).json({ error: "Room not found." });
   res.json(room);
+}));
+
+app.get("/api/search/local", asyncRoute(async (req, res) => {
+  const input = z.object({ q: z.string().trim().min(2).max(100), code: z.string().length(6) }).parse(req.query);
+  res.json({ items: await searchConnectifyLibrary(input.q, input.code.toUpperCase()) });
+}));
+
+const searchLimits = new Map<string, { count: number; resetAt: number }>();
+app.get("/api/search/youtube", asyncRoute(async (req, res) => {
+  const input = z.object({ q: z.string().trim().min(2).max(100), pageToken: z.string().max(200).optional() }).parse(req.query);
+  const key = req.ip || "unknown";
+  const now = Date.now();
+  const limit = searchLimits.get(key);
+  if (!limit || limit.resetAt <= now) searchLimits.set(key, { count: 1, resetAt: now + 60 * 60 * 1000 });
+  else if (limit.count >= 30) return res.status(429).json({ error: "Too many live searches. Try again later." });
+  else limit.count += 1;
+  if (!process.env.YOUTUBE_API_KEY) return res.status(503).json({ error: "Live YouTube search is not configured yet.", code: "SEARCH_UNAVAILABLE" });
+  try {
+    res.json(await searchYouTube(input.q, input.pageToken));
+  } catch (error: any) {
+    if (error?.status === 403 || error?.status === 429) return res.status(503).json({ error: "YouTube live search is temporarily unavailable. You can still paste a URL.", code: "SEARCH_QUOTA" });
+    throw error;
+  }
 }));
 
 app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
@@ -239,7 +263,7 @@ io.on("connection", (socket) => {
     if (!code || !isHostSocket(socket)) return reply({ ok: false, error: "Host access required." });
     const parsed = z.object({
       autopilotEnabled: z.boolean().optional(), partyMode: partyModeSchema.optional(), theme: themeSchema.optional(),
-      isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(), maxSongsPerUser: z.number().int().min(1).max(20).optional(),
+      isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(), maxSongsPerUser: z.number().int().min(1).max(20).optional(), discoverable: z.boolean().optional(),
     }).refine((value) => Object.keys(value).length > 0).safeParse(payload);
     if (!parsed.success) return reply({ ok: false, error: "Invalid room setting." });
     await prisma.room.update({ where: { code }, data: { ...parsed.data, revision: { increment: 1 } } });
