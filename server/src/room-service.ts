@@ -47,11 +47,13 @@ export async function roomSnapshot(code: string) {
     include: {
       tracks: { orderBy: { position: "asc" } },
       moments: { orderBy: { createdAt: "desc" }, take: 60 },
+      members: { where: { isBanned: false }, orderBy: { lastSeenAt: "desc" }, select: { id: true, name: true, avatar: true, role: true, joinedAt: true, lastSeenAt: true } },
     },
   });
   if (!room) return null;
   const queueOrder = [room.currentTrackId, ...fairQueueOrder(room.tracks, room.currentTrackId)].filter(Boolean);
-  return { ...room, moments: room.moments.reverse(), queueOrder, serverTime: new Date().toISOString() };
+  const { createdBy: _createdBy, hostTokenHash: _hostTokenHash, ...publicRoom } = room;
+  return { ...publicRoom, moments: room.moments.reverse(), queueOrder, serverTime: new Date().toISOString() };
 }
 
 export function createRoomCode() {

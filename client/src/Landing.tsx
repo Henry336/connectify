@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { ArrowRight, Headphones, Link2, ListMusic, Radio, Sparkles } from "lucide-react";
 import { api } from "./api";
-import { getIdentity, saveIdentity } from "./identity";
+import { getIdentity, getRecentRooms, saveHostToken, saveIdentity } from "./identity";
 
 export function Landing() {
   const identity = getIdentity();
+  const recentRooms = getRecentRooms();
   const [name, setName] = useState(identity.name);
   const [roomName, setRoomName] = useState("Friday night mix");
   const [code, setCode] = useState("");
@@ -19,7 +20,8 @@ export function Landing() {
     saveIdentity(nextIdentity);
     try {
       if (mode === "create") {
-        const room = await api<{ code: string }>("/api/rooms", { method: "POST", body: JSON.stringify({ name: roomName, userId: identity.userId }) });
+        const room = await api<{ code: string; hostToken: string }>("/api/rooms", { method: "POST", body: JSON.stringify({ name: roomName, userId: identity.userId }) });
+        saveHostToken(room.code, room.hostToken);
         window.location.href = `/room/${room.code}`;
       } else {
         await api(`/api/rooms/${code.toUpperCase()}`);
@@ -70,6 +72,7 @@ export function Landing() {
         {mode === "create" ? <label>Room name<input value={roomName} onChange={(e) => setRoomName(e.target.value)} maxLength={48} placeholder="Late night listening" /></label> : <label>Room code<input className="code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/[^a-z0-9]/gi, "").slice(0, 6))} minLength={6} maxLength={6} placeholder="ABC123" /></label>}
         {error && <p className="form-error">{error}</p>}
         <button className="primary wide" disabled={busy}>{busy ? "Tuning in…" : mode === "create" ? "Create listening room" : "Join the room"}<ArrowRight size={18} /></button>
+        {recentRooms.length > 0 && <div className="recent-rooms"><span>Return to a room</span>{recentRooms.slice(0, 3).map((room) => <a key={room.code} href={`/room/${room.code}`}><i><Radio /></i><strong>{room.name}</strong><small>{room.code}</small><ArrowRight /></a>)}</div>}
       </form>
     </section>
     <footer><a className="brand" href="/"><span className="brand-mark"><Radio size={16} /></span> connectify</a><span>Made for music and good company.</span></footer>

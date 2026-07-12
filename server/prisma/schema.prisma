@@ -12,16 +12,24 @@ model Room {
   code             String   @unique
   name             String
   createdBy        String
+  hostTokenHash    String?
   currentTrackId   String?
   isPlaying        Boolean  @default(false)
   playbackPosition Float    @default(0)
   startedAt        DateTime?
   autopilotEnabled Boolean  @default(false)
+  partyMode        String   @default("standard")
+  theme            String   @default("violet")
+  isLocked         Boolean  @default(false)
+  guestsCanControl Boolean  @default(true)
+  guestsCanAdd     Boolean  @default(true)
+  maxSongsPerUser  Int      @default(5)
   revision         Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   tracks           Track[]
   moments          Moment[]
+  members          RoomMember[]
 }
 
 model Track {
@@ -73,4 +81,20 @@ model Moment {
 
   @@index([roomId, createdAt])
   @@index([trackId, position])
+}
+
+model RoomMember {
+  id          String   @id @default(cuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  avatar      String
+  role        String   @default("guest")
+  isBanned    Boolean  @default(false)
+  joinedAt    DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([roomId, userId])
+  @@index([roomId, lastSeenAt])
 }

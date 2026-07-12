@@ -26,21 +26,40 @@ export type Moment = {
   createdAt: string;
 };
 
+export type PartyMode = "standard" | "pass_aux" | "blind_pick" | "one_take" | "discovery";
+export type RoomTheme = "violet" | "sunset" | "ocean" | "mono";
+
+export type RoomMember = {
+  id: string;
+  name: string;
+  avatar: string;
+  role: "host" | "guest";
+  joinedAt: string;
+  lastSeenAt: string;
+};
+
 export type Room = {
   id: string;
   code: string;
   name: string;
-  createdBy: string;
   currentTrackId: string | null;
   isPlaying: boolean;
   playbackPosition: number;
   startedAt: string | null;
   autopilotEnabled: boolean;
+  partyMode: PartyMode;
+  theme: RoomTheme;
+  isLocked: boolean;
+  guestsCanControl: boolean;
+  guestsCanAdd: boolean;
+  maxSongsPerUser: number;
   revision: number;
+  createdAt: string;
   serverTime: string;
   tracks: Track[];
   queueOrder: string[];
   moments: Moment[];
+  members: RoomMember[];
 };
 
-export type Person = { userId: string; name: string; avatar: string };
+export type Person = { id: string; name: string; avatar: string; role: "host" | "guest" };

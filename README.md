@@ -12,6 +12,9 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Opt-in DJ Autopilot that revives crowd favorites after fresh picks run out
 - Persistent timestamped Moments with synchronized replay
 - Live, shareable Room DNA generated from session activity
+- Five shared Party Modes: Standard, Pass the AUX, Blind Pick, One Take, and Discovery Night
+- Persistent member roster, listening history, room themes, and recent-room shortcuts
+- Host-token protected moderation, room locking, guest permissions, bans, and queue limits
 - Live listener presence
 - Responsive room and mobile player interface
 
@@ -65,6 +68,6 @@ The server owns room state. Clients send intentions, the server persists the mut
 
 ## Production follow-ups
 
-- Add room ownership and signed authentication before exposing moderator actions publicly.
+- Add optional user accounts if room ownership needs to follow hosts across browsers and devices; current moderation uses private per-room host tokens.
 - Add rate limiting and a Redis Socket.IO adapter when scaling beyond one backend instance.
 - Add provider adapters only after confirming their playback and account requirements.

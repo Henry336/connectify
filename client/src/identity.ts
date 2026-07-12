@@ -19,3 +19,23 @@ export function getIdentity(): Identity {
 export function saveIdentity(identity: Identity) {
   localStorage.setItem("connectify.identity", JSON.stringify(identity));
 }
+
+export function getHostToken(code: string) {
+  return localStorage.getItem(`connectify.host.${code.toUpperCase()}`) || undefined;
+}
+
+export function saveHostToken(code: string, token: string) {
+  localStorage.setItem(`connectify.host.${code.toUpperCase()}`, token);
+}
+
+export type RecentRoom = { code: string; name: string; lastVisited: number };
+
+export function getRecentRooms(): RecentRoom[] {
+  try { return JSON.parse(localStorage.getItem("connectify.recentRooms") || "[]"); }
+  catch { return []; }
+}
+
+export function rememberRoom(code: string, name: string) {
+  const rooms = getRecentRooms().filter((room) => room.code !== code.toUpperCase());
+  localStorage.setItem("connectify.recentRooms", JSON.stringify([{ code: code.toUpperCase(), name, lastVisited: Date.now() }, ...rooms].slice(0, 5)));
+}
