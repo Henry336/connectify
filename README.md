@@ -8,6 +8,10 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - YouTube URL parsing and metadata lookup (no YouTube API key required)
 - Synchronized play, pause, seek, skip, and track selection
 - Persistent PostgreSQL queue, ordering, votes, and playback state
+- Fair Queue contributor rotation with one vote per person and song
+- Opt-in DJ Autopilot that revives crowd favorites after fresh picks run out
+- Persistent timestamped Moments with synchronized replay
+- Live, shareable Room DNA generated from session activity
 - Live listener presence
 - Responsive room and mobile player interface
 
@@ -31,14 +35,15 @@ The frontend runs on `http://localhost:5173`; the API runs on `http://localhost:
 
 ## Deploy
 
-### Render backend
+### Render backend with Neon PostgreSQL
 
-The root `render.yaml` creates the Node web service and PostgreSQL database. In Render, create a Blueprint from this repository, then set:
+Create a Render Web Service from this repository with Root Directory `server`, Build Command `npm install && npm run build`, and Start Command `npm start`. Set:
 
 - `CLIENT_URL=https://your-connectify.vercel.app`
-- `DATABASE_URL` is injected automatically by the Blueprint database.
+- `DATABASE_URL` to the direct Neon PostgreSQL connection string
+- `NODE_VERSION=22`
 
-Render runs pending Prisma migrations whenever the service starts. The included free plans are suitable for an MVP preview, but Render's free Postgres database expires after 30 days and has no backups. For production usage, choose a paid Render instance and PostgreSQL plan; free services may sleep and are unsuitable for uninterrupted realtime rooms.
+Render runs pending Prisma migrations whenever the service starts. A free Render web service may sleep, so the first room request after inactivity can take longer.
 
 ### Vercel frontend
 
@@ -61,6 +66,5 @@ The server owns room state. Clients send intentions, the server persists the mut
 ## Production follow-ups
 
 - Add room ownership and signed authentication before exposing moderator actions publicly.
-- Track per-user votes to prevent repeat voting.
 - Add rate limiting and a Redis Socket.IO adapter when scaling beyond one backend instance.
 - Add provider adapters only after confirming their playback and account requirements.

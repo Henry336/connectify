@@ -4,7 +4,7 @@ import express from "express";
 import helmet from "helmet";
 import { Server } from "socket.io";
 import { z } from "zod";
-import { advanceRoom, createRoomCode, normalizePositions, prisma, roomSnapshot } from "./room-service.js";
+import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomSnapshot } from "./room-service.js";
 import { resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -44,13 +44,13 @@ app.get("/api/rooms/:code", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
-  const input = z.object({ url: z.string().url(), addedBy: z.string().trim().min(1).max(40) }).parse(req.body);
+  const input = z.object({ url: z.string().url(), addedBy: z.string().trim().min(1).max(40), userId: z.string().min(8).max(80) }).parse(req.body);
   const room = await prisma.room.findUnique({ where: { code: String(req.params.code).toUpperCase() }, include: { _count: { select: { tracks: true } } } });
   if (!room) return res.status(404).json({ error: "Room not found." });
   if (room._count.tracks >= 100) return res.status(409).json({ error: "This queue is full." });
 
   const metadata = await resolveTrack(input.url);
-  const track = await prisma.track.create({ data: { roomId: room.id, position: room._count.tracks, addedBy: input.addedBy, ...metadata } });
+  const track = await prisma.track.create({ data: { roomId: room.id, position: room._count.tracks, addedBy: input.addedBy, addedByUserId: input.userId, ...metadata } });
   if (!room.currentTrackId) {
     await prisma.room.update({ where: { id: room.id }, data: { currentTrackId: track.id, playbackPosition: 0, revision: { increment: 1 } } });
   }
@@ -95,15 +95,22 @@ io.on("connection", (socket) => {
     if (!code) return;
     const input = z.object({ isPlaying: z.boolean(), position: z.number().min(0).max(86400), trackId: z.string() }).safeParse(payload);
     if (!input.success) return;
-    const track = await prisma.track.findFirst({ where: { id: input.data.trackId, room: { code } }, select: { id: true, roomId: true } });
+    const track = await prisma.track.findFirst({ where: { id: input.data.trackId, room: { code } }, select: { id: true, roomId: true, room: { select: { currentTrackId: true } } } });
     if (!track) return;
-    await prisma.room.update({ where: { id: track.roomId }, data: {
-      currentTrackId: track.id,
-      isPlaying: input.data.isPlaying,
-      playbackPosition: input.data.position,
-      startedAt: input.data.isPlaying ? new Date() : null,
-      revision: { increment: 1 },
-    } });
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.room.update({ where: { id: track.roomId }, data: {
+        currentTrackId: track.id,
+        isPlaying: input.data.isPlaying,
+        playbackPosition: input.data.position,
+        startedAt: input.data.isPlaying ? now : null,
+        revision: { increment: 1 },
+      } });
+      if (track.room.currentTrackId && track.room.currentTrackId !== track.id) {
+        await tx.track.update({ where: { id: track.room.currentTrackId }, data: { playedAt: now } });
+        await tx.track.update({ where: { id: track.id }, data: { playedAt: null } });
+      }
+    });
     await emitSnapshot(code);
   }));
 
@@ -123,10 +130,10 @@ io.on("connection", (socket) => {
     const target = room.tracks.find((track) => track.id === parsed.data.trackId);
     if (!target) return;
     const remaining = room.tracks.filter((track) => track.id !== target.id);
-    const nextCurrent = room.currentTrackId === target.id ? remaining[0]?.id ?? null : room.currentTrackId;
+    const nextCurrent = room.currentTrackId === target.id ? fairQueueOrder(remaining, null)[0] ?? null : room.currentTrackId;
     await prisma.$transaction([
       prisma.track.delete({ where: { id: target.id } }),
-      prisma.room.update({ where: { id: room.id }, data: { currentTrackId: nextCurrent, isPlaying: nextCurrent ? room.isPlaying : false, playbackPosition: room.currentTrackId === target.id ? 0 : room.playbackPosition, startedAt: room.currentTrackId === target.id ? null : room.startedAt, revision: { increment: 1 } } }),
+      prisma.room.update({ where: { id: room.id }, data: { currentTrackId: nextCurrent, isPlaying: nextCurrent ? room.isPlaying : false, playbackPosition: room.currentTrackId === target.id ? 0 : room.playbackPosition, startedAt: room.currentTrackId === target.id ? (nextCurrent && room.isPlaying ? new Date() : null) : room.startedAt, revision: { increment: 1 } } }),
     ]);
     await normalizePositions(room.id, remaining.map((track) => track.id));
     await emitSnapshot(code);
@@ -134,11 +141,12 @@ io.on("connection", (socket) => {
 
   socket.on("queue:reorder", safe(async (payload) => {
     const code = socket.data.code as string | undefined;
-    const parsed = z.object({ trackIds: z.array(z.string()).max(100) }).safeParse(payload);
+    const parsed = z.object({ trackIds: z.array(z.string()).min(1).max(100).refine((ids) => new Set(ids).size === ids.length) }).safeParse(payload);
     if (!code || !parsed.success) return;
     const room = await prisma.room.findUnique({ where: { code }, include: { tracks: true } });
-    if (!room || room.tracks.length !== parsed.data.trackIds.length || !room.tracks.every((track) => parsed.data.trackIds.includes(track.id))) return;
-    await normalizePositions(room.id, parsed.data.trackIds);
+    if (!room || !parsed.data.trackIds.every((id) => room.tracks.some((track) => track.id === id))) return;
+    const untouchedIds = room.tracks.filter((track) => !parsed.data.trackIds.includes(track.id)).sort((a, b) => a.position - b.position).map((track) => track.id);
+    await normalizePositions(room.id, [...untouchedIds, ...parsed.data.trackIds]);
     await emitSnapshot(code);
   }));
 
@@ -160,6 +168,39 @@ io.on("connection", (socket) => {
       throw error;
     }
     reply({ ok: true, alreadyVoted: false });
+    await emitSnapshot(code);
+  }));
+
+  socket.on("room:settings", safe(async (payload) => {
+    const code = socket.data.code as string | undefined;
+    const parsed = z.object({ autopilotEnabled: z.boolean() }).safeParse(payload);
+    if (!code || !parsed.success) return;
+    await prisma.room.update({ where: { code }, data: { autopilotEnabled: parsed.data.autopilotEnabled, revision: { increment: 1 } } });
+    await emitSnapshot(code);
+  }));
+
+  socket.on("room:react", safe(async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const userId = socket.data.userId as string | undefined;
+    const parsed = z.object({ trackId: z.string(), emoji: z.enum(["🔥", "💜", "🥹", "🕺", "✨"]), position: z.number().min(0).max(86400) }).safeParse(payload);
+    if (!code || !userId || !parsed.success) return reply({ ok: false });
+    const lastMomentAt = Number(socket.data.lastMomentAt || 0);
+    if (Date.now() - lastMomentAt < 500) return reply({ ok: false, error: "Slow down a little." });
+    const person = presence.get(code)?.get(socket.id);
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, currentTrackId: true } });
+    if (!room || room.currentTrackId !== parsed.data.trackId || !person) return reply({ ok: false });
+    socket.data.lastMomentAt = Date.now();
+    const moment = await prisma.moment.create({ data: {
+      roomId: room.id,
+      trackId: parsed.data.trackId,
+      userId,
+      name: person.name,
+      avatar: person.avatar,
+      emoji: parsed.data.emoji,
+      position: parsed.data.position,
+    } });
+    io.to(code).emit("room:moment", moment);
+    reply({ ok: true });
   }));
 
   socket.on("disconnect", () => {
