@@ -16,10 +16,12 @@ model Room {
   isPlaying        Boolean  @default(false)
   playbackPosition Float    @default(0)
   startedAt        DateTime?
+  autopilotEnabled Boolean  @default(false)
   revision         Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   tracks           Track[]
+  moments          Moment[]
 }
 
 model Track {
@@ -34,10 +36,13 @@ model Track {
   thumbnail  String?
   duration   Float?
   addedBy    String
+  addedByUserId String?
   position   Int
   votes      Int      @default(0)
+  playedAt   DateTime?
   createdAt  DateTime @default(now())
   trackVotes TrackVote[]
+  moments    Moment[]
 
   @@index([roomId, position])
 }
@@ -51,4 +56,21 @@ model TrackVote {
 
   @@unique([trackId, userId])
   @@index([userId])
+}
+
+model Moment {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  trackId   String
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  userId    String
+  name      String
+  avatar    String
+  emoji     String
+  position  Float
+  createdAt DateTime @default(now())
+
+  @@index([roomId, createdAt])
+  @@index([trackId, position])
 }
