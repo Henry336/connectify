@@ -7,6 +7,19 @@ import type { Person, Room, Track } from "./types";
 import { YouTubePlayer } from "./YouTubePlayer";
 
 const formatTime = (value: number) => `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, "0")}`;
+const effectivePosition = (room: Room) => room.playbackPosition + (room.isPlaying && room.startedAt ? Math.max(0, (Date.now() - new Date(room.startedAt).getTime()) / 1000) : 0);
+
+function PlaybackProgress({ room, current, onSeek }: { room: Room; current: Track | null; onSeek: (position: number) => void }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!room.isPlaying) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [room.isPlaying]);
+  const elapsed = room.playbackPosition + (room.isPlaying && room.startedAt ? Math.max(0, (now - new Date(room.startedAt).getTime()) / 1000) : 0);
+  const duration = current?.duration || 240;
+  return <div className="progress-wrap"><input aria-label="Song progress" type="range" min="0" max={duration} value={Math.min(elapsed, duration)} onChange={(event) => onSeek(Number(event.target.value))} style={{ "--progress": `${Math.min(100, elapsed / duration * 100)}%` } as React.CSSProperties} /><div><span>{formatTime(elapsed)}</span><span>{current?.duration ? formatTime(current.duration) : "—:—"}</span></div></div>;
+}
 const avatars = ["🌻", "🪩", "🎧", "🌙", "🛼", "✨"];
 
 export function RoomPage({ code }: { code: string }) {
@@ -19,36 +32,42 @@ export function RoomPage({ code }: { code: string }) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const [liked, setLiked] = useState(false);
+  const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(() => new Set());
   const [volume, setVolume] = useState(72);
 
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 500); return () => clearInterval(timer); }, []);
   useEffect(() => {
     let active = true;
-    api<Room>(`/api/rooms/${code}`).then((data) => active && setRoom(data)).catch((err) => setError(err.message));
+    api<Room>(`/api/rooms/${code}`).then((data) => active && setRoom((previous) => !previous || data.revision >= previous.revision ? data : previous)).catch((err) => setError(err.message));
     const connection = io(API_URL, { transports: ["websocket", "polling"] });
     connection.on("connect", () => connection.emit("room:join", { code, ...identity }));
-    connection.on("room:snapshot", setRoom);
+    connection.on("room:snapshot", (snapshot: Room) => setRoom((previous) => !previous || snapshot.revision >= previous.revision ? snapshot : previous));
     connection.on("room:presence", setPeople);
+    connection.on("queue:votes", (ids: string[]) => setVotedTrackIds(new Set(ids)));
+    connection.on("queue:vote-updated", ({ trackId, votes }: { trackId: string; votes: number }) => {
+      setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes } : track) } : previous);
+    });
     setSocket(connection);
     return () => { active = false; connection.disconnect(); };
   }, [code]);
 
   const current = room?.tracks.find((track) => track.id === room.currentTrackId) ?? null;
-  const currentIndex = room && current ? room.tracks.findIndex((track) => track.id === current.id) : -1;
-  const elapsed = room ? room.playbackPosition + (room.isPlaying && room.startedAt ? Math.max(0, (now - new Date(room.startedAt).getTime()) / 1000) : 0) : 0;
-  const duration = current?.duration || 240;
   const filteredTracks = useMemo(() => room?.tracks.filter((track) => `${track.title} ${track.artist} ${track.addedBy}`.toLowerCase().includes(filter.toLowerCase())) ?? [], [room?.tracks, filter]);
 
   const setPlayback = useCallback((track: Track | null, isPlaying: boolean, position = 0) => {
     if (track) socket?.emit("playback:set", { trackId: track.id, isPlaying, position });
   }, [socket]);
-  const skip = (direction: -1 | 1) => {
-    if (!room?.tracks.length) return;
-    const target = room.tracks[(currentIndex + direction + room.tracks.length) % room.tracks.length];
-    setPlayback(target, true, 0);
-  };
+  const skip = useCallback((direction: -1 | 1) => {
+    if (!current) return;
+    socket?.emit("playback:advance", { trackId: current.id, direction });
+  }, [current, socket]);
+  const vote = useCallback((trackId: string) => {
+    if (!socket || votedTrackIds.has(trackId)) return;
+    setVotedTrackIds((previous) => new Set(previous).add(trackId));
+    socket.emit("queue:vote", { trackId }, (result: { ok: boolean; alreadyVoted?: boolean }) => {
+      if (!result?.ok) setVotedTrackIds((previous) => { const next = new Set(previous); next.delete(trackId); return next; });
+    });
+  }, [socket, votedTrackIds]);
   const addTrack = async (event: React.FormEvent) => {
     event.preventDefault(); if (!url.trim()) return;
     setAdding(true); setError("");
@@ -94,10 +113,10 @@ export function RoomPage({ code }: { code: string }) {
             <div><span className="now-label">NOW PLAYING</span><h2>{current?.title || "The room is quiet"}</h2><p>{current?.artist || "Paste a YouTube link to get started"}</p></div>
             {current && <a href={current.url} target="_blank" rel="noreferrer" className="icon-button" aria-label="Open source"><Link2 /></a>}
           </div>
-          <div className="progress-wrap"><input aria-label="Song progress" type="range" min="0" max={duration} value={Math.min(elapsed, duration)} onChange={(e) => current && setPlayback(current, room.isPlaying, Number(e.target.value))} style={{ "--progress": `${Math.min(100, elapsed / duration * 100)}%` } as React.CSSProperties} /><div><span>{formatTime(elapsed)}</span><span>{current?.duration ? formatTime(current.duration) : "—:—"}</span></div></div>
+          <PlaybackProgress room={room} current={current} onSeek={(position) => current && setPlayback(current, room.isPlaying, position)} />
           <div className="main-controls">
             <button className="control-small" onClick={() => skip(-1)} disabled={!current}><SkipBack fill="currentColor" /></button>
-            <button className="play-button" onClick={() => setPlayback(current, !room.isPlaying, elapsed)} disabled={!current}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
+            <button className="play-button" onClick={() => setPlayback(current, !room.isPlaying, effectivePosition(room))} disabled={!current}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
             <button className="control-small" onClick={() => skip(1)} disabled={!current}><SkipForward fill="currentColor" /></button>
           </div>
           <div className="volume-row"><Volume2 size={17} /><input aria-label="Volume" type="range" min="0" max="100" value={volume} onChange={(e) => setVolume(Number(e.target.value))} style={{ "--progress": `${volume}%` } as React.CSSProperties} /></div>
@@ -119,7 +138,7 @@ export function RoomPage({ code }: { code: string }) {
             return <article key={track.id} className={`queue-item ${active ? "active" : ""}`}>
               <button className="queue-thumb" onClick={() => setPlayback(track, true, 0)} aria-label={`Play ${track.title}`}><img src={track.thumbnail || ""} alt="" /><span>{active && room.isPlaying ? <i className="equalizer"><b /><b /><b /></i> : <Play size={15} fill="currentColor" />}</span></button>
               <div className="queue-meta"><strong>{track.title}</strong><span>{track.artist}</span><small>Added by {track.addedBy}</small></div>
-              <div className="queue-actions"><button onClick={() => socket?.emit("queue:vote", { trackId: track.id })} title="Vote up"><Heart size={14} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={index === 0} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={index === filteredTracks.length - 1} title="Move down"><ArrowDown size={14} /></button><button onClick={() => socket?.emit("queue:remove", { trackId: track.id })} title="Remove"><Trash2 size={14} /></button></div>
+              <div className="queue-actions"><button className={votedTrackIds.has(track.id) ? "voted" : ""} onClick={() => vote(track.id)} disabled={votedTrackIds.has(track.id)} title={votedTrackIds.has(track.id) ? "Already voted" : "Vote up"}><Heart size={14} fill={votedTrackIds.has(track.id) ? "currentColor" : "none"} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={index === 0} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={index === filteredTracks.length - 1} title="Move down"><ArrowDown size={14} /></button><button onClick={() => socket?.emit("queue:remove", { trackId: track.id })} title="Remove"><Trash2 size={14} /></button></div>
             </article>;
           })}
           {!filteredTracks.length && <div className="queue-empty"><ListMusic /><strong>{filter ? "No matches" : "Your queue is empty"}</strong><span>{filter ? "Try another search." : "Paste a link to start the music."}</span></div>}
@@ -128,6 +147,6 @@ export function RoomPage({ code }: { code: string }) {
       </aside>
     </section>
 
-    {current && <div className="mobile-player"><img src={current.thumbnail || ""} alt="" /><div><strong>{current.title}</strong><span>{current.artist}</span></div><button onClick={() => setPlayback(current, !room.isPlaying, elapsed)}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button><button onClick={() => skip(1)}><ChevronRight /></button></div>}
+    {current && <div className="mobile-player"><img src={current.thumbnail || ""} alt="" /><div><strong>{current.title}</strong><span>{current.artist}</span></div><button onClick={() => setPlayback(current, !room.isPlaying, effectivePosition(room))}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button><button onClick={() => skip(1)}><ChevronRight /></button></div>}
   </main>;
 }

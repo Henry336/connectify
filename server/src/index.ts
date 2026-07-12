@@ -4,7 +4,7 @@ import express from "express";
 import helmet from "helmet";
 import { Server } from "socket.io";
 import { z } from "zod";
-import { createRoomCode, normalizePositions, prisma, roomSnapshot } from "./room-service.js";
+import { advanceRoom, createRoomCode, normalizePositions, prisma, roomSnapshot } from "./room-service.js";
 import { resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -61,9 +61,13 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
 
 const presence = new Map<string, Map<string, { userId: string; name: string; avatar: string }>>();
 const emitPresence = (code: string) => io.to(code).emit("room:presence", [...(presence.get(code)?.values() ?? [])]);
+const emitSnapshot = async (code: string) => io.to(code).emit("room:snapshot", await roomSnapshot(code));
+const safe = (handler: (...args: any[]) => Promise<void>) => (...args: any[]) => {
+  void handler(...args).catch((error) => console.error("Socket event failed:", error));
+};
 
 io.on("connection", (socket) => {
-  socket.on("room:join", async (payload, reply = () => undefined) => {
+  socket.on("room:join", safe(async (payload, reply = () => undefined) => {
     try {
       const input = z.object({ code: z.string().length(6), userId: z.string().min(8).max(80), name: z.string().trim().min(1).max(30), avatar: z.string().max(4) }).parse(payload);
       const code = input.code.toUpperCase();
@@ -75,31 +79,42 @@ io.on("connection", (socket) => {
       presence.get(code)!.set(socket.id, { userId: input.userId, name: input.name, avatar: input.avatar });
       emitPresence(code);
       socket.emit("room:snapshot", snapshot);
+      const votes = await prisma.trackVote.findMany({
+        where: { userId: input.userId, track: { room: { code } } },
+        select: { trackId: true },
+      });
+      socket.emit("queue:votes", votes.map((vote) => vote.trackId));
       reply({ ok: true });
     } catch (error: any) {
       reply({ ok: false, error: error?.message || "Could not join room." });
     }
-  });
+  }));
 
-  socket.on("playback:set", async (payload) => {
+  socket.on("playback:set", safe(async (payload) => {
     const code = socket.data.code as string | undefined;
     if (!code) return;
     const input = z.object({ isPlaying: z.boolean(), position: z.number().min(0).max(86400), trackId: z.string() }).safeParse(payload);
     if (!input.success) return;
-    const room = await prisma.room.findUnique({ where: { code } });
-    const track = await prisma.track.findFirst({ where: { id: input.data.trackId, roomId: room?.id } });
-    if (!room || !track) return;
-    await prisma.room.update({ where: { id: room.id }, data: {
+    const track = await prisma.track.findFirst({ where: { id: input.data.trackId, room: { code } }, select: { id: true, roomId: true } });
+    if (!track) return;
+    await prisma.room.update({ where: { id: track.roomId }, data: {
       currentTrackId: track.id,
       isPlaying: input.data.isPlaying,
       playbackPosition: input.data.position,
       startedAt: input.data.isPlaying ? new Date() : null,
       revision: { increment: 1 },
     } });
-    io.to(code).emit("room:snapshot", await roomSnapshot(code));
-  });
+    await emitSnapshot(code);
+  }));
 
-  socket.on("queue:remove", async (payload) => {
+  socket.on("playback:advance", safe(async (payload) => {
+    const code = socket.data.code as string | undefined;
+    const parsed = z.object({ trackId: z.string(), direction: z.union([z.literal(-1), z.literal(1)]) }).safeParse(payload);
+    if (!code || !parsed.success) return;
+    if (await advanceRoom(code, parsed.data.trackId, parsed.data.direction)) await emitSnapshot(code);
+  }));
+
+  socket.on("queue:remove", safe(async (payload) => {
     const code = socket.data.code as string | undefined;
     const parsed = z.object({ trackId: z.string() }).safeParse(payload);
     if (!code || !parsed.success) return;
@@ -114,28 +129,38 @@ io.on("connection", (socket) => {
       prisma.room.update({ where: { id: room.id }, data: { currentTrackId: nextCurrent, isPlaying: nextCurrent ? room.isPlaying : false, playbackPosition: room.currentTrackId === target.id ? 0 : room.playbackPosition, startedAt: room.currentTrackId === target.id ? null : room.startedAt, revision: { increment: 1 } } }),
     ]);
     await normalizePositions(room.id, remaining.map((track) => track.id));
-    io.to(code).emit("room:snapshot", await roomSnapshot(code));
-  });
+    await emitSnapshot(code);
+  }));
 
-  socket.on("queue:reorder", async (payload) => {
+  socket.on("queue:reorder", safe(async (payload) => {
     const code = socket.data.code as string | undefined;
     const parsed = z.object({ trackIds: z.array(z.string()).max(100) }).safeParse(payload);
     if (!code || !parsed.success) return;
     const room = await prisma.room.findUnique({ where: { code }, include: { tracks: true } });
     if (!room || room.tracks.length !== parsed.data.trackIds.length || !room.tracks.every((track) => parsed.data.trackIds.includes(track.id))) return;
     await normalizePositions(room.id, parsed.data.trackIds);
-    io.to(code).emit("room:snapshot", await roomSnapshot(code));
-  });
+    await emitSnapshot(code);
+  }));
 
-  socket.on("queue:vote", async (payload) => {
+  socket.on("queue:vote", safe(async (payload, reply = () => undefined) => {
     const code = socket.data.code as string | undefined;
+    const userId = socket.data.userId as string | undefined;
     const parsed = z.object({ trackId: z.string() }).safeParse(payload);
-    if (!code || !parsed.success) return;
-    const room = await prisma.room.findUnique({ where: { code } });
-    if (!room) return;
-    await prisma.track.updateMany({ where: { id: parsed.data.trackId, roomId: room.id }, data: { votes: { increment: 1 } } });
-    io.to(code).emit("room:snapshot", await roomSnapshot(code));
-  });
+    if (!code || !userId || !parsed.success) return reply({ ok: false });
+    const track = await prisma.track.findFirst({ where: { id: parsed.data.trackId, room: { code } }, select: { id: true } });
+    if (!track) return reply({ ok: false });
+    try {
+      const [, updatedTrack] = await prisma.$transaction([
+        prisma.trackVote.create({ data: { trackId: track.id, userId } }),
+        prisma.track.update({ where: { id: track.id }, data: { votes: { increment: 1 } } }),
+      ]);
+      io.to(code).emit("queue:vote-updated", { trackId: updatedTrack.id, votes: updatedTrack.votes });
+    } catch (error: any) {
+      if (error?.code === "P2002") return reply({ ok: true, alreadyVoted: true });
+      throw error;
+    }
+    reply({ ok: true, alreadyVoted: false });
+  }));
 
   socket.on("disconnect", () => {
     const code = socket.data.code as string | undefined;
