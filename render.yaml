@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: connectify-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL
+        fromDatabase:
+          name: connectify-db
+          property: connectionString
+      - key: CLIENT_URL
+        sync: false
+
+databases:
+  - name: connectify-db
+    plan: free
+    databaseName: connectify
+    user: connectify
