@@ -38,9 +38,9 @@ export function Landing() {
 
     <section className="hero">
       <div className="hero-copy">
-        <div className="eyebrow"><Sparkles size={14} /> Your music, in sync</div>
+        <div className="eyebrow"><Sparkles size={14} /> Music and watch parties, in sync</div>
         <h1>Good songs are<br /><em>better together.</em></h1>
-        <p>Create a room, drop a link, and press play. Everyone hears the same moment—wherever they are.</p>
+        <p>Create a room, drop a YouTube link, and press play. Hear the same song or watch the same video together—wherever everyone is.</p>
         <button className="primary hero-action" onClick={() => document.querySelector(".room-card")?.scrollIntoView({ behavior: "smooth" })}>Start listening <ArrowRight size={18} /></button>
         <div className="trust-row"><span><span className="live-dot" /> No account needed</span><span>Free to start</span></div>
       </div>
@@ -62,7 +62,7 @@ export function Landing() {
     <section className="start-section">
       <div className="benefits">
         <div><span><Link2 /></span><h3>Drop a link</h3><p>Paste a YouTube link and it’s ready for the room.</p></div>
-        <div><span><Headphones /></span><h3>Perfectly in sync</h3><p>Play, pause, and skip together in real time.</p></div>
+        <div><span><Headphones /></span><h3>Watch together</h3><p>Turn on Watch Party for synchronized video, timestamped chat, and spoiler-safe conversation.</p></div>
         <div><span><ListMusic /></span><h3>Build the queue</h3><p>Everyone gets a say in what plays next.</p></div>
       </div>
 

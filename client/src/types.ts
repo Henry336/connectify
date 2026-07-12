@@ -12,6 +12,8 @@ export type Track = {
   position: number;
   votes: number;
   playedAt: string | null;
+  removedAt: string | null;
+  playNext: boolean;
 };
 
 export type Moment = {
@@ -26,7 +28,20 @@ export type Moment = {
   createdAt: string;
 };
 
-export type PartyMode = "standard" | "pass_aux" | "blind_pick" | "one_take" | "discovery";
+export type ChatMessage = {
+  id: string;
+  roomId: string;
+  trackId: string | null;
+  userId: string;
+  name: string;
+  avatar: string;
+  body: string;
+  position: number | null;
+  spoiler: boolean;
+  createdAt: string;
+};
+
+export type PartyMode = "standard" | "pass_aux" | "blind_pick" | "one_take" | "discovery" | "watch_party";
 export type RoomTheme = "violet" | "sunset" | "ocean" | "mono";
 
 export type RoomMember = {
@@ -56,10 +71,12 @@ export type Room = {
   revision: number;
   createdAt: string;
   serverTime: string;
+  receivedAt?: number;
   tracks: Track[];
   queueOrder: string[];
   moments: Moment[];
   members: RoomMember[];
+  messages: ChatMessage[];
 };
 
 export type Person = { id: string; name: string; avatar: string; role: "host" | "guest" };

@@ -30,6 +30,7 @@ model Room {
   tracks           Track[]
   moments          Moment[]
   members          RoomMember[]
+  messages         ChatMessage[]
 }
 
 model Track {
@@ -48,9 +49,13 @@ model Track {
   position   Int
   votes      Int      @default(0)
   playedAt   DateTime?
+  removedAt  DateTime?
+  removedBy  String?
+  playNext   Boolean  @default(false)
   createdAt  DateTime @default(now())
   trackVotes TrackVote[]
   moments    Moment[]
+  messages   ChatMessage[]
 
   @@index([roomId, position])
 }
@@ -97,4 +102,22 @@ model RoomMember {
 
   @@unique([roomId, userId])
   @@index([roomId, lastSeenAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  trackId   String?
+  track     Track?   @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  userId    String
+  name      String
+  avatar    String
+  body      String
+  position  Float?
+  spoiler   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([roomId, createdAt])
+  @@index([trackId, position])
 }

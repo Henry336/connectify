@@ -9,6 +9,7 @@ export type FairTrack = {
   position: number;
   votes: number;
   playedAt?: Date | string | null;
+  playNext?: boolean;
 };
 
 const contributorKey = (track: FairTrack) => track.addedByUserId || `name:${track.addedBy.toLowerCase()}`;
@@ -17,9 +18,11 @@ export function fairQueueOrder(tracks: FairTrack[], currentTrackId: string | nul
   const current = tracks.find((track) => track.id === currentTrackId);
   const currentContributor = current ? contributorKey(current) : null;
   const pending = tracks.filter((track) => track.id !== currentTrackId && !track.playedAt);
+  const pinned = pending.filter((track) => track.playNext).sort((a, b) => a.position - b.position);
+  const regular = pending.filter((track) => !track.playNext);
   const groups = new Map<string, FairTrack[]>();
 
-  for (const track of pending) {
+  for (const track of regular) {
     const key = contributorKey(track);
     const group = groups.get(key) || [];
     group.push(track);
@@ -32,7 +35,7 @@ export function fairQueueOrder(tracks: FairTrack[], currentTrackId: string | nul
     if (keyB === currentContributor && keyA !== currentContributor) return -1;
     return Math.min(...tracksA.map((track) => track.position)) - Math.min(...tracksB.map((track) => track.position));
   });
-  const result: string[] = [];
+  const result: string[] = pinned.map((track) => track.id);
   let round = 0;
   while (result.length < pending.length) {
     for (const [, group] of contributorOrder) if (group[round]) result.push(group[round].id);
@@ -45,15 +48,16 @@ export async function roomSnapshot(code: string) {
   const room = await prisma.room.findUnique({
     where: { code: code.toUpperCase() },
     include: {
-      tracks: { orderBy: { position: "asc" } },
+      tracks: { where: { removedAt: null }, orderBy: { position: "asc" } },
       moments: { orderBy: { createdAt: "desc" }, take: 60 },
       members: { where: { isBanned: false }, orderBy: { lastSeenAt: "desc" }, select: { id: true, name: true, avatar: true, role: true, joinedAt: true, lastSeenAt: true } },
+      messages: { orderBy: { createdAt: "desc" }, take: 100 },
     },
   });
   if (!room) return null;
   const queueOrder = [room.currentTrackId, ...fairQueueOrder(room.tracks, room.currentTrackId)].filter(Boolean);
   const { createdBy: _createdBy, hostTokenHash: _hostTokenHash, ...publicRoom } = room;
-  return { ...publicRoom, moments: room.moments.reverse(), queueOrder, serverTime: new Date().toISOString() };
+  return { ...publicRoom, moments: room.moments.reverse(), messages: room.messages.reverse(), queueOrder, serverTime: new Date().toISOString() };
 }
 
 export function createRoomCode() {
@@ -70,7 +74,7 @@ export async function normalizePositions(roomId: string, trackIds: string[]) {
 export async function advanceRoom(code: string, expectedTrackId: string, direction: -1 | 1) {
   const room = await prisma.room.findUnique({
     where: { code },
-    include: { tracks: { orderBy: { position: "asc" } } },
+    include: { tracks: { where: { removedAt: null }, orderBy: { position: "asc" } } },
   });
   if (!room || room.currentTrackId !== expectedTrackId) return false;
 
@@ -94,10 +98,11 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
         : { isPlaying: false, playbackPosition: 0, startedAt: null, revision: { increment: 1 } },
     });
     if (updated.count !== 1) return false;
-    if (resetCycle) await tx.track.updateMany({ where: { roomId: room.id }, data: { playedAt: null } });
+    if (resetCycle) await tx.track.updateMany({ where: { roomId: room.id, removedAt: null }, data: { playedAt: null } });
     if (targetId && targetId !== current.id) {
       if (direction === 1) await tx.track.update({ where: { id: current.id }, data: { playedAt: now } });
       await tx.track.update({ where: { id: targetId }, data: { playedAt: null } });
+      await tx.track.update({ where: { id: targetId }, data: { playNext: false } });
     } else if (!targetId) {
       await tx.track.update({ where: { id: current.id }, data: { playedAt: now } });
     }

@@ -15,6 +15,9 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Five shared Party Modes: Standard, Pass the AUX, Blind Pick, One Take, and Discovery Night
 - Persistent member roster, listening history, room themes, and recent-room shortcuts
 - Host-token protected moderation, room locking, guest permissions, bans, and queue limits
+- Watch Party mode with theater layout, timestamped persistent chat, spoiler hiding, and moment jumping
+- Queue intelligence with duplicate blocking, Play Next, learned durations, ETAs, and undo removal
+- Clock-skew-safe playback timing, continuous drift correction, connection health, and host resync
 - Live listener presence
 - Responsive room and mobile player interface
 

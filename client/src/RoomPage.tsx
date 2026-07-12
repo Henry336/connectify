@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, Copy, Dna, EyeOff, Gamepad2, Heart, History, Info, Link2, ListMusic, Lock, LogOut, MoreHorizontal, Palette, Pause, Play, Plus, Radio, RotateCw, Search, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, UserMinus, Users, Volume2, WandSparkles, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, Copy, Dna, EyeOff, Gamepad2, Heart, History, Info, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Undo2, UserMinus, Users, Volume2, WandSparkles, Wifi, WifiOff, X } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { api, API_URL } from "./api";
 import { getHostToken, getIdentity, rememberRoom, saveHostToken } from "./identity";
-import type { Moment, PartyMode, Person, Room, RoomTheme, Track } from "./types";
+import { effectivePosition, withReceipt } from "./playback";
+import type { ChatMessage, Moment, PartyMode, Person, Room, RoomTheme, Track } from "./types";
 import { YouTubePlayer } from "./YouTubePlayer";
 
 const formatTime = (value: number) => `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, "0")}`;
-const effectivePosition = (room: Room) => room.playbackPosition + (room.isPlaying && room.startedAt ? Math.max(0, (Date.now() - new Date(room.startedAt).getTime()) / 1000) : 0);
 const avatars = ["🌻", "🪩", "🎧", "🌙", "🛼", "✨"];
 const reactionChoices = ["🔥", "💜", "🥹", "🕺", "✨"] as const;
 const partyModes: Array<{ id: PartyMode; name: string; description: string }> = [
@@ -16,6 +16,7 @@ const partyModes: Array<{ id: PartyMode; name: string; description: string }> = 
   { id: "blind_pick", name: "Blind Pick", description: "Upcoming song identities stay hidden until they play." },
   { id: "one_take", name: "One Take", description: "No manual skipping once a song starts." },
   { id: "discovery", name: "Discovery Night", description: "Each artist can appear only once in the room." },
+  { id: "watch_party", name: "Watch Party", description: "Theater layout, remote sync health, and timestamped group chat." },
 ];
 const modeName = (mode: PartyMode) => partyModes.find((item) => item.id === mode)?.name || "Standard";
 
@@ -26,7 +27,7 @@ function PlaybackProgress({ room, current, onSeek }: { room: Room; current: Trac
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [room.isPlaying]);
-  const elapsed = room.playbackPosition + (room.isPlaying && room.startedAt ? Math.max(0, (now - new Date(room.startedAt).getTime()) / 1000) : 0);
+  const elapsed = effectivePosition(room, now);
   const duration = current?.duration || 240;
   return <div className="progress-wrap"><input aria-label="Song progress" type="range" min="0" max={duration} value={Math.min(elapsed, duration)} onChange={(event) => onSeek(Number(event.target.value))} style={{ "--progress": `${Math.min(100, elapsed / duration * 100)}%` } as React.CSSProperties} /><div><span>{formatTime(elapsed)}</span><span>{current?.duration ? formatTime(current.duration) : "—:—"}</span></div></div>;
 }
@@ -58,17 +59,27 @@ export function RoomPage({ code }: { code: string }) {
   const [hostOpen, setHostOpen] = useState(false);
   const [role, setRole] = useState<"host" | "guest">("guest");
   const [momentBursts, setMomentBursts] = useState<Moment[]>([]);
+  const [placement, setPlacement] = useState<"last" | "next">("last");
+  const [sideTab, setSideTab] = useState<"queue" | "chat">("queue");
+  const [chatBody, setChatBody] = useState("");
+  const [chatSpoiler, setChatSpoiler] = useState(false);
+  const [revealedSpoilers, setRevealedSpoilers] = useState<Set<string>>(() => new Set());
+  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "reconnecting">("connecting");
+  const [syncHealth, setSyncHealth] = useState({ drift: 0, correcting: false, buffering: false });
+  const [removedTrack, setRemovedTrack] = useState<{ trackId: string; title: string } | null>(null);
 
   useEffect(() => {
     let active = true;
-    api<Room>(`/api/rooms/${code}`).then((data) => { if (active) { rememberRoom(data.code, data.name); setRoom((previous) => !previous || data.revision >= previous.revision ? data : previous); } }).catch((err) => setError(err.message));
+    api<Room>(`/api/rooms/${code}`).then((data) => { if (active) { const received = withReceipt(data); rememberRoom(data.code, data.name); setRoom((previous) => !previous || data.revision >= previous.revision ? received : previous); } }).catch((err) => setError(err.message));
     const connection = io(API_URL, { transports: ["websocket", "polling"] });
-    connection.on("connect", () => connection.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; error?: string }) => {
+    connection.on("connect", () => { setConnectionState("connected"); connection.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; error?: string }) => {
       if (!result?.ok) { setRoom(null); setError(result?.error || "Could not join this room."); connection.disconnect(); return; }
       setRole(result.role || "guest");
       if (result.hostToken) saveHostToken(code, result.hostToken);
-    }));
-    connection.on("room:snapshot", (snapshot: Room) => setRoom((previous) => !previous || snapshot.revision >= previous.revision ? snapshot : previous));
+    }); });
+    connection.on("disconnect", () => setConnectionState("reconnecting"));
+    connection.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
+    connection.on("room:snapshot", (snapshot: Room) => { const received = withReceipt(snapshot); setRoom((previous) => !previous || snapshot.revision >= previous.revision ? received : previous); });
     connection.on("room:presence", setPeople);
     connection.on("queue:votes", (ids: string[]) => setVotedTrackIds(new Set(ids)));
     connection.on("queue:vote-updated", ({ trackId, votes }: { trackId: string; votes: number }) => setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes } : track) } : previous));
@@ -77,6 +88,8 @@ export function RoomPage({ code }: { code: string }) {
       setMomentBursts((previous) => [...previous, moment].slice(-5));
       window.setTimeout(() => setMomentBursts((previous) => previous.filter((item) => item.id !== moment.id)), 2600);
     });
+    connection.on("room:chat", (message: ChatMessage) => setRoom((previous) => previous ? { ...previous, messages: [...previous.messages, message].slice(-100) } : previous));
+    connection.on("queue:removed", (removed: { trackId: string; title: string }) => { setRemovedTrack(removed); window.setTimeout(() => setRemovedTrack((current) => current?.trackId === removed.trackId ? null : current), 8000); });
     connection.on("room:kicked", () => { window.alert("The host removed you from this room."); window.location.href = "/"; });
     setSocket(connection);
     return () => { active = false; connection.disconnect(); };
@@ -99,6 +112,19 @@ export function RoomPage({ code }: { code: string }) {
   }), [orderedTracks, filter, room?.partyMode, room?.currentTrackId]);
   const currentMoments = useMemo(() => room?.moments.filter((moment) => moment.trackId === current?.id).slice(-6).reverse() ?? [], [room?.moments, current?.id]);
   const playedTracks = useMemo(() => room?.tracks.filter((track) => track.playedAt).sort((a, b) => new Date(b.playedAt!).getTime() - new Date(a.playedAt!).getTime()) ?? [], [room?.tracks]);
+  const etaByTrack = useMemo(() => {
+    const result = new Map<string, number>();
+    let elapsed = 0;
+    for (const track of orderedTracks) {
+      result.set(track.id, elapsed);
+      elapsed += track.id === current?.id ? Math.max(0, (track.duration || 240) - (room ? effectivePosition(room) : 0)) : (track.duration || 240);
+    }
+    return result;
+  }, [orderedTracks, current?.id, room?.revision, syncHealth.drift]);
+  const queueDuration = useMemo(() => {
+    const last = orderedTracks[orderedTracks.length - 1];
+    return last ? (etaByTrack.get(last.id) || 0) + (last.duration || 240) : 0;
+  }, [orderedTracks, etaByTrack]);
   const roomDna = useMemo(() => {
     const tracks = room?.tracks ?? [];
     const contributors = new Set(tracks.map((track) => track.addedByUserId || track.addedBy));
@@ -132,7 +158,7 @@ export function RoomPage({ code }: { code: string }) {
   const addTrack = async (event: React.FormEvent) => {
     event.preventDefault(); if (!url.trim()) return;
     setAdding(true); setError("");
-    try { await api(`/api/rooms/${code}/tracks`, { method: "POST", body: JSON.stringify({ url, addedBy: identity.name, userId: identity.userId, hostToken: getHostToken(code) }) }); setUrl(""); }
+    try { await api(`/api/rooms/${code}/tracks`, { method: "POST", body: JSON.stringify({ url, addedBy: identity.name, userId: identity.userId, hostToken: getHostToken(code), placement }) }); setUrl(""); setPlacement("last"); }
     catch (err) { setError(err instanceof Error ? err.message : "Could not add that track."); }
     finally { setAdding(false); }
   };
@@ -147,15 +173,35 @@ export function RoomPage({ code }: { code: string }) {
   const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser">>) => socket?.emit("room:settings", settings, (result: { ok: boolean; error?: string }) => { if (!result?.ok) setError(result?.error || "Could not update the room."); });
   const kickMember = (memberId: string, name: string) => { if (window.confirm(`Remove ${name} and prevent them from rejoining?`)) socket?.emit("room:kick", { memberId }); };
   const clearQueue = () => { if (window.confirm("Clear the entire queue and listening history?")) socket?.emit("queue:clear", {}, () => setQueueMenu(false)); };
+  const sendChat = (event: React.FormEvent) => {
+    event.preventDefault(); if (!chatBody.trim() || !socket) return;
+    socket.emit("room:chat", { body: chatBody, spoiler: chatSpoiler, trackId: current?.id || null, position: room ? effectivePosition(room) : null }, (result: { ok: boolean; error?: string }) => {
+      if (result?.ok) { setChatBody(""); setChatSpoiler(false); }
+      else setError(result?.error || "Could not send that message.");
+    });
+  };
+  const resyncEveryone = () => { if (current && room && canControl) setPlayback(current, room.isPlaying, effectivePosition(room)); };
+  const jumpToMessage = (message: ChatMessage) => {
+    const track = room?.tracks.find((item) => item.id === message.trackId);
+    if (track && message.position !== null) setPlayback(track, true, message.position);
+  };
+  const enterFullscreen = () => { void document.querySelector<HTMLElement>(".video-stage")?.requestFullscreen?.(); };
+
+  useEffect(() => {
+    if (sideTab !== "chat") return;
+    const list = document.querySelector<HTMLElement>(".chat-list");
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [room?.messages.length, sideTab]);
 
   if (!room) return <main className="room-loading"><a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a><div className="loading-record" />{error ? <><h2>{error}</h2><a href="/">Go back home</a></> : <p>Tuning in to {code}…</p>}</main>;
 
-  return <main className={`room-shell theme-${room.theme}`}>
+  return <main className={`room-shell theme-${room.theme} ${room.partyMode === "watch_party" ? "watch-party" : ""}`}>
     <header className="room-nav">
       <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
       <div className="room-title-mobile"><strong>{room.name}</strong><span><i /> Live</span></div>
       <div className="room-nav-actions">
         <div className="listeners"><div className="avatar-stack">{people.slice(0, 4).map((person, index) => <i key={person.id} title={`${person.name}${person.role === "host" ? " · Host" : ""}`}>{person.avatar || avatars[index]}</i>)}</div><span>{people.length} listening</span></div>
+        <button className={`sync-pill ${connectionState !== "connected" || syncHealth.buffering ? "waiting" : syncHealth.correcting ? "correcting" : ""}`} onClick={resyncEveryone} disabled={!isHost || !current} title={isHost ? "Resync everyone" : "Playback synchronization health"}>{connectionState === "connected" ? <Wifi /> : <WifiOff />}<span>{connectionState !== "connected" ? "Reconnecting" : syncHealth.buffering ? "Buffering" : syncHealth.correcting ? "Correcting" : `In sync · ${Math.abs(syncHealth.drift).toFixed(1)}s`}</span></button>
         <button className="secondary" onClick={copyInvite}>{copied ? <Check size={17} /> : <Share2 size={17} />}{copied ? "Copied" : "Invite"}</button>
         <div className="menu-wrap"><button className="icon-button" aria-label="Room options" aria-expanded={roomMenu} onClick={() => { setRoomMenu(!roomMenu); setQueueMenu(false); }}><MoreHorizontal /></button>{roomMenu && <div className="action-menu nav-menu"><button onClick={() => { setDnaOpen(true); setRoomMenu(false); }}><Dna />View Room DNA</button><button onClick={() => { setMembersOpen(true); setRoomMenu(false); }}><Users />Room profile</button>{isHost && <button onClick={() => { setHostOpen(true); setRoomMenu(false); }}><ShieldCheck />Host controls</button>}<button onClick={() => { void navigator.clipboard.writeText(room.code); setCopied(true); window.setTimeout(() => setCopied(false), 1800); setRoomMenu(false); }}><Copy />Copy room code</button><button onClick={() => { window.location.href = "/"; }}><LogOut />Leave room</button></div>}</div>
       </div>
@@ -167,19 +213,19 @@ export function RoomPage({ code }: { code: string }) {
         {room.partyMode !== "standard" && <div className="party-mode-banner"><Gamepad2 /><div><strong>{modeName(room.partyMode)}</strong><span>{partyModes.find((mode) => mode.id === room.partyMode)?.description}</span></div>{isHost && <button onClick={() => setPartyOpen(true)}>Change</button>}</div>}
         <div className="now-card">
           <div className="video-stage">
-            {current ? <YouTubePlayer key={current.id} track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} /> : <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
+            {current ? <YouTubePlayer key={current.id} track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} /> : <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
             <div className="stage-vignette" />
             <div className="moment-burst-layer">{momentBursts.filter((moment) => moment.trackId === current?.id).map((moment, index) => <span key={moment.id} style={{ "--burst-x": `${18 + index * 16}%` } as React.CSSProperties}><b>{moment.emoji}</b><small>{moment.name}</small></span>)}</div>
             <button className={`heart-button ${liked ? "liked" : ""}`} onClick={() => setLiked(!liked)} aria-label="Like song"><Heart fill={liked ? "currentColor" : "none"} /></button>
             {current && <div className="source-badge">YOUTUBE</div>}
           </div>
-          <div className="track-info"><div><span className="now-label">NOW PLAYING</span><h2>{current?.title || "The room is quiet"}</h2><p>{current?.artist || "Paste a YouTube link to get started"}</p></div>{current && <a href={current.url} target="_blank" rel="noreferrer" className="icon-button" aria-label="Open source"><Link2 /></a>}</div>
+          <div className="track-info"><div><span className="now-label">NOW PLAYING</span><h2>{current?.title || "The room is quiet"}</h2><p>{current?.artist || "Paste a YouTube link to get started"}</p></div>{current && <div className="track-info-actions">{room.partyMode === "watch_party" && <button className="icon-button" onClick={enterFullscreen} aria-label="Enter full-screen theater"><Maximize2 /></button>}<a href={current.url} target="_blank" rel="noreferrer" className="icon-button" aria-label="Open source"><Link2 /></a></div>}</div>
           <PlaybackProgress room={room} current={current} onSeek={(position) => current && setPlayback(current, room.isPlaying, position)} />
           <div className="main-controls"><button className="control-small" onClick={() => skip(-1)} disabled={!current || !canControl || room.partyMode === "one_take"}><SkipBack fill="currentColor" /></button><button className="play-button" onClick={() => setPlayback(current, !room.isPlaying, effectivePosition(room))} disabled={!current || !canControl}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button><button className="control-small" onClick={() => skip(1)} disabled={!current || !canControl || room.partyMode === "one_take"}><SkipForward fill="currentColor" /></button></div>
           <div className="volume-row"><Volume2 size={17} /><input aria-label="Volume" type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} style={{ "--progress": `${volume}%` } as React.CSSProperties} /></div>
         </div>
 
-        <form className="add-bar" onSubmit={addTrack}><span className="provider-icon">▶</span><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder={canAdd ? "Paste a YouTube link to add a song…" : "The host paused guest submissions"} aria-label="YouTube URL" disabled={!canAdd} /><button disabled={adding || !url || !canAdd}><Plus size={19} />{adding ? "Adding…" : "Add to queue"}</button></form>
+        <form className="add-bar" onSubmit={addTrack}><span className="provider-icon">▶</span><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder={canAdd ? `Paste a YouTube ${room.partyMode === "watch_party" ? "video" : "link"}…` : "The host paused guest submissions"} aria-label="YouTube URL" disabled={!canAdd} />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={adding || !url || !canAdd}>{placement === "next" ? <ListPlus size={19} /> : <Plus size={19} />}{adding ? "Adding…" : placement === "next" ? "Play next" : "Add to queue"}</button></form>
         {error && <div className="inline-error"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
         <div className="quick-reactions"><span>Mark this moment</span>{reactionChoices.map((emoji) => <button key={emoji} disabled={!current} onClick={(event) => react(emoji, event.currentTarget)}>{emoji}</button>)}</div>
         {currentMoments.length > 0 && <div className="moment-strip"><span><Sparkles /> Moments</span>{currentMoments.map((moment) => <button key={moment.id} title={`${moment.name} reacted at ${formatTime(moment.position)}`} onClick={() => current && setPlayback(current, true, moment.position)}>{moment.emoji}<small>{formatTime(moment.position)}</small></button>)}</div>}
@@ -187,7 +233,8 @@ export function RoomPage({ code }: { code: string }) {
 
       <aside className="queue-pane">
         <div className="queue-header"><div><span>{room.partyMode === "pass_aux" ? "PASS THE AUX" : "FAIR QUEUE"}</span><h2>Room queue <small>{orderedTracks.length}</small></h2></div><div className="menu-wrap"><button className="icon-button" aria-label="Queue options" aria-expanded={queueMenu} onClick={() => { setQueueMenu(!queueMenu); setRoomMenu(false); }}><MoreHorizontal /></button>{queueMenu && <div className="action-menu queue-menu">{isHost && <button onClick={() => { setPartyOpen(true); setQueueMenu(false); }}><Gamepad2 />Party mode</button>}{isHost && <button onClick={() => { updateSettings({ autopilotEnabled: !room.autopilotEnabled }); setQueueMenu(false); }}><WandSparkles />DJ Autopilot <i className={room.autopilotEnabled ? "toggle on" : "toggle"} /></button>}<button onClick={() => { setHistoryOpen(true); setQueueMenu(false); }}><History />Listening history</button><button onClick={() => { setFairInfoOpen(true); setQueueMenu(false); }}><Info />How Fair Queue works</button><button onClick={copyQueue}><Copy />Copy queue</button>{isHost && <button onClick={clearQueue}><Trash2 />Clear room queue</button>}</div>}</div></div>
-        {room.autopilotEnabled && <div className="autopilot-banner"><WandSparkles /><div><strong>DJ Autopilot is on</strong><span>Crowd favorites return only after fresh picks run out.</span></div>{isHost && <button onClick={() => updateSettings({ autopilotEnabled: false })}><X /></button>}</div>}
+        {room.partyMode === "watch_party" && <div className="watch-tabs"><button className={sideTab === "queue" ? "active" : ""} onClick={() => setSideTab("queue")}><ListMusic />Queue</button><button className={sideTab === "chat" ? "active" : ""} onClick={() => setSideTab("chat")}><MessageCircle />Chat <small>{room.messages.length || ""}</small></button></div>}
+        {(room.partyMode !== "watch_party" || sideTab === "queue") && <>{room.autopilotEnabled && <div className="autopilot-banner"><WandSparkles /><div><strong>DJ Autopilot is on</strong><span>Crowd favorites return only after fresh picks run out.</span></div>{isHost && <button onClick={() => updateSettings({ autopilotEnabled: false })}><X /></button>}</div>}
         <label className="queue-search"><Search size={17} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search queue" /></label>
         <div className="queue-list">
           {filteredTracks.map((track) => {
@@ -198,17 +245,19 @@ export function RoomPage({ code }: { code: string }) {
             const pendingCount = orderedTracks.filter((item) => item.id !== current?.id).length;
             return <article key={track.id} className={`queue-item ${active ? "active" : ""}`}>
               <button className={`queue-thumb ${blind ? "blind" : ""}`} onClick={() => setPlayback(track, true, 0)} disabled={!canControl || blind} aria-label={blind ? "Hidden Blind Pick" : `Play ${track.title}`}>{blind ? <EyeOff /> : <img src={track.thumbnail || ""} alt="" />}<span>{active && room.isPlaying ? <i className="equalizer"><b /><b /><b /></i> : <Play size={15} fill="currentColor" />}</span></button>
-              <div className="queue-meta"><strong>{blind ? "Mystery pick" : track.title}</strong><span>{blind ? "Revealed when it starts" : track.artist}</span><small>{active ? "Playing now" : `Fair position ${queueIndex + 1}`} · Added by {track.addedBy}</small></div>
+              <div className="queue-meta"><strong>{blind ? "Mystery pick" : track.title}</strong><span>{blind ? "Revealed when it starts" : track.artist}</span><small>{active ? "Playing now" : track.playNext ? "Pinned to play next" : `Starts in ~${Math.max(1, Math.round((etaByTrack.get(track.id) || 0) / 60))} min`} · Added by {track.addedBy}</small></div>
               <div className="queue-actions"><button className={votedTrackIds.has(track.id) ? "voted" : ""} onClick={() => vote(track.id)} disabled={votedTrackIds.has(track.id)} title={votedTrackIds.has(track.id) ? "Already voted" : "Vote up"}><Heart size={14} fill={votedTrackIds.has(track.id) ? "currentColor" : "none"} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={!canControl || active || pendingIndex <= 0} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={!canControl || active || pendingIndex < 0 || pendingIndex === pendingCount - 1} title="Move down"><ArrowDown size={14} /></button><button onClick={() => socket?.emit("queue:remove", { trackId: track.id })} disabled={!canControl || (room.partyMode === "one_take" && active)} title="Remove"><Trash2 size={14} /></button></div>
             </article>;
           })}
           {!filteredTracks.length && <div className="queue-empty"><ListMusic /><strong>{filter ? "No matches" : "Your queue is empty"}</strong><span>{filter ? "Try another search." : "Paste a link to start the music."}</span></div>}
         </div>
-        <div className="queue-footer"><RotateCw size={15} /><span>{room.autopilotEnabled ? "Autopilot will keep this session moving" : orderedTracks.length ? `${orderedTracks.length - 1} fair picks coming up` : "Ready for a song"}</span></div>
+        <div className="queue-footer"><RotateCw size={15} /><span>{room.autopilotEnabled ? "Autopilot will keep this session moving" : orderedTracks.length ? `${orderedTracks.length - 1} upcoming · about ${Math.max(1, Math.round(queueDuration / 60))} min` : "Ready for a song"}</span></div></>}
+        {room.partyMode === "watch_party" && sideTab === "chat" && <div className="watch-chat"><div className="chat-list">{room.messages.length ? room.messages.map((message) => { const hidden = message.spoiler && !revealedSpoilers.has(message.id); const messageTrackExists = room.tracks.some((track) => track.id === message.trackId); return <article key={message.id}><i>{message.avatar}</i><div><header><strong>{message.name}</strong>{message.position !== null && <button disabled={!canControl || !messageTrackExists} onClick={() => jumpToMessage(message)}>{formatTime(message.position)}</button>}</header>{hidden ? <button className="spoiler-message" onClick={() => setRevealedSpoilers((previous) => new Set(previous).add(message.id))}>Spoiler hidden · reveal</button> : <p>{message.body}</p>}</div></article>; }) : <div className="chat-empty"><MessageCircle /><strong>The couch is quiet</strong><span>Start the conversation. Messages can stay attached to this exact video moment.</span></div>}</div><form className="chat-compose" onSubmit={sendChat}><textarea value={chatBody} onChange={(event) => setChatBody(event.target.value)} maxLength={300} placeholder="Say something about this moment…" /><div><label><input type="checkbox" checked={chatSpoiler} onChange={(event) => setChatSpoiler(event.target.checked)} /> Hide as spoiler</label><button disabled={!chatBody.trim()}><Send /></button></div></form></div>}
       </aside>
     </section>
 
     {current && <div className="mobile-player"><img src={current.thumbnail || ""} alt="" /><div><strong>{current.title}</strong><span>{current.artist}</span></div><button disabled={!canControl} onClick={() => setPlayback(current, !room.isPlaying, effectivePosition(room))}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button><button disabled={!canControl || room.partyMode === "one_take"} onClick={() => skip(1)}><ChevronRight /></button></div>}
+    {removedTrack && <div className="undo-toast"><span><Trash2 />Removed “{removedTrack.title}”</span><button onClick={() => socket?.emit("queue:undo", { trackId: removedTrack.trackId }, (result: { ok: boolean }) => { if (result?.ok) setRemovedTrack(null); })}><Undo2 />Undo</button></div>}
 
     {dnaOpen && <FeatureModal title="Room DNA" icon={<Dna />} onClose={() => setDnaOpen(false)}><div className="dna-hero"><span>TONIGHT’S VIBE</span><strong>{roomDna.vibe}</strong><p>Built live from what this room plays, loves, and reacts to.</p></div><div className="dna-bars">{[["Energy", roomDna.energy], ["Discovery", roomDna.discovery], ["Togetherness", roomDna.togetherness], ["Crowd love", roomDna.love]].map(([label, value]) => <div key={String(label)}><span>{label}<b>{value}%</b></span><i><em style={{ width: `${value}%` }} /></i></div>)}</div><div className="dna-stats"><div><span>Top artist</span><strong>{roomDna.topArtist}</strong></div><div><span>Chief contributor</span><strong>{roomDna.topContributor}</strong></div><div><span>Shared by</span><strong>{roomDna.contributors} music minds</strong></div></div><button className="primary modal-action" onClick={shareDna}><Share2 />{copied ? "DNA copied" : "Share this Room DNA"}</button></FeatureModal>}
     {fairInfoOpen && <FeatureModal title="Fair Queue" icon={<Sparkles />} onClose={() => setFairInfoOpen(false)}><div className="fair-explainer"><div><b>1</b><span><strong>Everyone gets a turn</strong>Contributors rotate before one person can play twice.</span></div><div><b>2</b><span><strong>Votes still matter</strong>Votes choose which of that contributor’s songs leads their turn.</span></div><div><b>3</b><span><strong>No stale repeats</strong>Played songs leave the fresh queue. Autopilot revives favorites only when it runs dry.</span></div></div></FeatureModal>}

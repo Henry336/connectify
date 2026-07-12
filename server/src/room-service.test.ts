@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fairQueueOrder } from "./room-service.js";
 
-const track = (id: string, user: string, position: number, votes = 0, playedAt: Date | null = null) => ({
-  id, addedBy: user, addedByUserId: user, position, votes, playedAt,
+const track = (id: string, user: string, position: number, votes = 0, playedAt: Date | null = null, playNext = false) => ({
+  id, addedBy: user, addedByUserId: user, position, votes, playedAt, playNext,
 });
 
 test("fair queue rotates contributors before repeating one person", () => {
@@ -19,4 +19,9 @@ test("votes prioritize a contributor's pick without defeating rotation", () => {
 test("played tracks stay out of the fresh queue", () => {
   const tracks = [track("current", "a", 0), track("old", "b", 1, 8, new Date()), track("fresh", "c", 2)];
   assert.deepEqual(fairQueueOrder(tracks, "current"), ["fresh"]);
+});
+
+test("Play Next overrides contributor rotation exactly once", () => {
+  const tracks = [track("current", "a", 0), track("fair-first", "b", 1), track("pinned", "a", 2, 0, null, true), track("later", "c", 3)];
+  assert.deepEqual(fairQueueOrder(tracks, "current"), ["pinned", "fair-first", "later"]);
 });
