@@ -30,25 +30,34 @@ function effectivePosition(room: Room) {
 export function YouTubePlayer({ track, room, volume, onEnded }: { track: Track; room: Room; volume: number; onEnded: () => void }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
+  const endedRef = useRef(onEnded);
+  const roomRef = useRef(room);
+  const volumeRef = useRef(volume);
+  endedRef.current = onEnded;
+  roomRef.current = room;
+  volumeRef.current = volume;
 
   useEffect(() => {
     let cancelled = false;
     loadYouTubeApi().then(() => {
       if (cancelled || !mountRef.current) return;
-      playerRef.current = new window.YT.Player(mountRef.current, {
+      const target = document.createElement("div");
+      mountRef.current.replaceChildren(target);
+      playerRef.current = new window.YT.Player(target, {
         videoId: track.providerId,
         playerVars: { autoplay: 0, controls: 0, disablekb: 1, modestbranding: 1, playsinline: 1, rel: 0 },
         events: {
           onReady: () => {
-            playerRef.current.setVolume(volume);
-            playerRef.current.seekTo(effectivePosition(room), true);
-            room.isPlaying ? playerRef.current.playVideo() : playerRef.current.pauseVideo();
+            const currentRoom = roomRef.current;
+            playerRef.current.setVolume(volumeRef.current);
+            playerRef.current.seekTo(effectivePosition(currentRoom), true);
+            currentRoom.isPlaying ? playerRef.current.playVideo() : playerRef.current.pauseVideo();
           },
-          onStateChange: (event: any) => { if (event.data === window.YT.PlayerState.ENDED) onEnded(); },
+          onStateChange: (event: any) => { if (event.data === window.YT.PlayerState.ENDED) endedRef.current(); },
         },
       });
     });
-    return () => { cancelled = true; playerRef.current?.destroy?.(); playerRef.current = null; };
+    return () => { cancelled = true; playerRef.current?.destroy?.(); playerRef.current = null; mountRef.current?.replaceChildren(); };
   }, [track.id]);
 
   useEffect(() => {

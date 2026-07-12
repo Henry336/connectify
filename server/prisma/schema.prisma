@@ -37,6 +37,18 @@ model Track {
   position   Int
   votes      Int      @default(0)
   createdAt  DateTime @default(now())
+  trackVotes TrackVote[]
 
   @@index([roomId, position])
+}
+
+model TrackVote {
+  id        String   @id @default(cuid())
+  trackId   String
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  userId    String
+  createdAt DateTime @default(now())
+
+  @@unique([trackId, userId])
+  @@index([userId])
 }
