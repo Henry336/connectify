@@ -47,12 +47,14 @@ export function Landing() {
 
       <div className="hero-visual" aria-hidden="true">
         <div className="orb orb-one" /><div className="orb orb-two" />
-        <div className="mock-player">
-          <div className="mock-top"><span>LIVE ROOM</span><div className="avatar-stack"><i>🌻</i><i>🪩</i><i>🎧</i><i>+3</i></div></div>
-          <div className="mock-cover"><div className="vinyl"><div /></div></div>
-          <div className="mock-song"><strong>Midnight Drive</strong><span>The Daydreamers</span></div>
-          <div className="mock-wave">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${10 + ((i * 17) % 31)}px` }} />)}</div>
-          <div className="mock-time"><span>1:42</span><span>3:28</span></div>
+        <div className="mock-player-motion">
+          <div className="mock-player">
+            <div className="mock-top"><span>LIVE ROOM</span><div className="avatar-stack"><i>🌻</i><i>🪩</i><i>🎧</i><i>+3</i></div></div>
+            <div className="mock-cover"><div className="vinyl"><div /></div></div>
+            <div className="mock-song"><strong>Midnight Drive</strong><span>The Daydreamers</span></div>
+            <div className="mock-wave">{Array.from({ length: 34 }, (_, i) => <i key={i} style={{ height: `${10 + ((i * 17) % 31)}px`, animationDelay: `${-((i * 83) % 1200)}ms` }} />)}</div>
+            <div className="mock-time"><span>1:42</span><span>3:28</span></div>
+          </div>
         </div>
         <div className="floating-pill pill-one">🔥 <span>this part!</span></div>
         <div className="floating-pill pill-two"><ListMusic size={17} /> <span>12 in queue</span></div>
