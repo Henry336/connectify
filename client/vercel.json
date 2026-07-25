@@ -1,8 +1,8 @@
 {
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/room/:code", "destination": "/app.html" },
-    { "source": "/share", "destination": "/app.html" }
+    { "source": "/room/:code", "destination": "/app" },
+    { "source": "/share", "destination": "/app" }
   ],
   "headers": [
     {

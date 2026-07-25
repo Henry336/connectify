@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, Copy, Dna, EyeOff, Gamepad2, Heart, History, Info, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Undo2, UserMinus, Users, Volume2, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { api, API_URL, recordClientTiming, waitForBackend } from "./api";
@@ -78,6 +78,15 @@ export function RoomPage({ code }: { code: string }) {
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [lastSearch, setLastSearch] = useState("");
   const [liveCached, setLiveCached] = useState(false);
+  const seekTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    document.title = room ? `${room.name} — Connectify` : `Joining room ${code} — Connectify`;
+  }, [code, room?.name]);
+
+  useEffect(() => () => {
+    if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -201,6 +210,10 @@ export function RoomPage({ code }: { code: string }) {
   }, [socket]);
   const setPlayback = useCallback((track: Track | null, isPlaying: boolean, position = 0) => {
     if (!track || !canControl || !socket || track.pending) return;
+    if (seekTimerRef.current !== null) {
+      window.clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = null;
+    }
     const now = new Date().toISOString();
     setRoom((previous) => previous ? withReceipt({
       ...previous,
@@ -215,6 +228,27 @@ export function RoomPage({ code }: { code: string }) {
       recordClientTiming("socket:playback:set", performance.now() - startedAt);
       if (!result?.ok) { requestSync(); setError(result?.error || "Playback changed before that command arrived."); }
     });
+  }, [socket, canControl, requestSync]);
+  const seekPlayback = useCallback((track: Track | null, isPlaying: boolean, position: number) => {
+    if (!track || !canControl || !socket || track.pending) return;
+    const now = new Date().toISOString();
+    setRoom((previous) => previous ? withReceipt({
+      ...previous,
+      currentTrackId: track.id,
+      isPlaying,
+      playbackPosition: position,
+      startedAt: isPlaying ? now : null,
+      serverTime: now,
+    }) : previous);
+    if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current);
+    seekTimerRef.current = window.setTimeout(() => {
+      seekTimerRef.current = null;
+      const startedAt = performance.now();
+      socket.emit("playback:set", { trackId: track.id, isPlaying, position }, (result: { ok: boolean; error?: string }) => {
+        recordClientTiming("socket:playback:seek", performance.now() - startedAt);
+        if (!result?.ok) { requestSync(); setError(result?.error || "Playback changed before that seek arrived."); }
+      });
+    }, 120);
   }, [socket, canControl, requestSync]);
   const skip = useCallback((direction: -1 | 1, reason: "manual" | "ended" = "manual") => {
     if (!current || !socket || (reason !== "ended" && !canControl)) return;
@@ -399,7 +433,7 @@ export function RoomPage({ code }: { code: string }) {
             {current && <div className="source-badge">YOUTUBE</div>}
           </div>
           <div className="track-info"><div><span className="now-label">NOW PLAYING</span><h2>{current?.title || "The room is quiet"}</h2><p>{current?.artist || "Paste a YouTube link to get started"}</p></div>{current && <div className="track-info-actions">{room.partyMode === "watch_party" && <button className="icon-button" onClick={enterFullscreen} aria-label="Enter full-screen theater"><Maximize2 /></button>}<a href={current.url} target="_blank" rel="noreferrer" className="icon-button" aria-label="Open source"><Link2 /></a></div>}</div>
-          <PlaybackProgress room={room} current={current} onSeek={(position) => current && setPlayback(current, room.isPlaying, position)} />
+          <PlaybackProgress room={room} current={current} onSeek={(position) => seekPlayback(current, room.isPlaying, position)} />
           <div className="main-controls"><button className="control-small" onClick={() => skip(-1)} disabled={!current || !canControl || room.partyMode === "one_take"}><SkipBack fill="currentColor" /></button><button className="play-button" onClick={() => setPlayback(current, !room.isPlaying, effectivePosition(room))} disabled={!current || !canControl}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button><button className="control-small" onClick={() => skip(1)} disabled={!current || !canControl || room.partyMode === "one_take"}><SkipForward fill="currentColor" /></button></div>
           <div className="volume-row"><Volume2 size={17} /><input aria-label="Volume" type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} style={{ "--progress": `${volume}%` } as React.CSSProperties} /></div>
         </div>

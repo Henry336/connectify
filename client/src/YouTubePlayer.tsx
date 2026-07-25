@@ -135,7 +135,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
     };
   }, []);
 
-  useEffect(() => { synchronize(true); }, [track?.id, room.revision, room.isPlaying]);
+  useEffect(() => { synchronize(true); }, [track?.id, room.revision, room.isPlaying, room.playbackPosition, room.startedAt]);
   useEffect(() => { playerRef.current?.setVolume?.(volume); }, [volume]);
 
   return <div className="youtube-player" ref={mountRef} aria-label={track ? `Playing ${track.title}` : "YouTube player waiting for a track"} />;
