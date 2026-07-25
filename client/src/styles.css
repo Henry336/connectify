@@ -470,6 +470,11 @@ input[type="range"]:hover::-webkit-slider-thumb { opacity: 1; }
 .load-more { width: 100%; height: 42px; margin-top: 10px; }
 .youtube-attribution { margin: 12px 3px 0; color: #625b69; font-size: 9px; line-height: 1.5; }
 .youtube-attribution a { color: #a98ae9; text-decoration: underline; }
+.queue-list,.chat-list,.search-results,.feature-modal { scrollbar-width: thin; scrollbar-color: #4d3b68 transparent; }
+.queue-list::-webkit-scrollbar,.chat-list::-webkit-scrollbar,.search-results::-webkit-scrollbar,.feature-modal::-webkit-scrollbar { width: 8px; height: 8px; }
+.queue-list::-webkit-scrollbar-track,.chat-list::-webkit-scrollbar-track,.search-results::-webkit-scrollbar-track,.feature-modal::-webkit-scrollbar-track { background: transparent; }
+.queue-list::-webkit-scrollbar-thumb,.chat-list::-webkit-scrollbar-thumb,.search-results::-webkit-scrollbar-thumb,.feature-modal::-webkit-scrollbar-thumb { min-height: 34px; border: 2px solid transparent; border-radius: 999px; background: #4d3b68; background-clip: padding-box; }
+.queue-list::-webkit-scrollbar-thumb:hover,.chat-list::-webkit-scrollbar-thumb:hover,.search-results::-webkit-scrollbar-thumb:hover,.feature-modal::-webkit-scrollbar-thumb:hover { background: #7254a0; background-clip: padding-box; }
 .search-loading,.search-prompt,.search-error { min-height: 90px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #756d7d; text-align: center; }
 .search-loading { flex-direction: row; }
 .search-loading i { width: 17px; height: 17px; border: 2px solid #403749; border-top-color: var(--purple-bright); border-radius: 50%; animation: spin .8s linear infinite; }
