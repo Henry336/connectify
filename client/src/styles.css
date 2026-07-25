@@ -13,7 +13,14 @@
   --yellow: #f5ce55;
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; scrollbar-color: #494052 #0a0910; }
+@media (pointer: fine) {
+  html { scrollbar-gutter: stable; }
+  html::-webkit-scrollbar { width: 11px; }
+  html::-webkit-scrollbar-track { background: #0a0910; }
+  html::-webkit-scrollbar-thumb { min-height: 44px; border: 3px solid #0a0910; border-radius: 999px; background: #494052; background-clip: padding-box; }
+  html::-webkit-scrollbar-thumb:hover { background: #705494; background-clip: padding-box; }
+}
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #0a0910; }
 button, input { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
