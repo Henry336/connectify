@@ -48,16 +48,80 @@ export async function roomSnapshot(code: string) {
   const room = await prisma.room.findUnique({
     where: { code: code.toUpperCase() },
     include: {
-      tracks: { where: { removedAt: null }, orderBy: { position: "asc" } },
-      moments: { orderBy: { createdAt: "desc" }, take: 60 },
-      members: { where: { isBanned: false }, orderBy: { lastSeenAt: "desc" }, select: { id: true, name: true, avatar: true, role: true, joinedAt: true, lastSeenAt: true } },
-      messages: { orderBy: { createdAt: "desc" }, take: 100 },
+      tracks: { where: { removedAt: null, playedAt: null }, orderBy: { position: "asc" } },
+      moments: { orderBy: { createdAt: "desc" }, take: 30 },
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 31,
+        include: { replyTo: { select: { id: true, name: true, body: true, spoiler: true } } },
+      },
+      _count: {
+        select: {
+          messages: true,
+          members: { where: { isBanned: false } },
+        },
+      },
     },
   });
   if (!room) return null;
   const queueOrder = [room.currentTrackId, ...fairQueueOrder(room.tracks, room.currentTrackId)].filter(Boolean);
-  const { createdBy: _createdBy, hostTokenHash: _hostTokenHash, ...publicRoom } = room;
-  return { ...publicRoom, moments: room.moments.reverse(), messages: room.messages.reverse(), queueOrder, serverTime: new Date().toISOString() };
+  const hasMoreMessages = room.messages.length > 30;
+  const messages = room.messages.slice(0, 30).reverse();
+  const { createdBy: _createdBy, hostTokenHash: _hostTokenHash, _count, ...publicRoom } = room;
+  return {
+    ...publicRoom,
+    members: [],
+    memberCount: _count.members,
+    moments: room.moments.reverse(),
+    messages,
+    hasMoreMessages,
+    queueOrder,
+    serverTime: new Date().toISOString(),
+  };
+}
+
+export async function roomMessagesPage(code: string, before?: Date, limit = 30) {
+  const room = await prisma.room.findUnique({ where: { code: code.toUpperCase() }, select: { id: true } });
+  if (!room) return null;
+  const messages = await prisma.chatMessage.findMany({
+    where: { roomId: room.id, ...(before ? { createdAt: { lt: before } } : {}) },
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+    include: { replyTo: { select: { id: true, name: true, body: true, spoiler: true } } },
+  });
+  return { messages: messages.slice(0, limit).reverse(), hasMore: messages.length > limit };
+}
+
+export async function roomMembersPage(code: string, cursor?: string, limit = 30) {
+  const room = await prisma.room.findUnique({ where: { code: code.toUpperCase() }, select: { id: true } });
+  if (!room) return null;
+  const members = await prisma.roomMember.findMany({
+    where: { roomId: room.id, isBanned: false },
+    orderBy: [{ lastSeenAt: "desc" }, { id: "asc" }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: { id: true, userId: true, name: true, avatar: true, role: true, joinedAt: true, lastSeenAt: true },
+  });
+  return {
+    members: members.slice(0, limit),
+    hasMore: members.length > limit,
+    cursor: members.length > limit ? members[limit - 1]?.id ?? null : null,
+  };
+}
+
+export async function roomHistoryPage(code: string, before?: Date, limit = 30) {
+  const room = await prisma.room.findUnique({ where: { code: code.toUpperCase() }, select: { id: true } });
+  if (!room) return null;
+  const tracks = await prisma.track.findMany({
+    where: { roomId: room.id, removedAt: null, playedAt: { not: null, ...(before ? { lt: before } : {}) } },
+    orderBy: { playedAt: "desc" },
+    take: limit + 1,
+  });
+  return {
+    tracks: tracks.slice(0, limit),
+    hasMore: tracks.length > limit,
+    cursor: tracks.length > limit ? tracks[limit - 1]?.playedAt?.toISOString() ?? null : null,
+  };
 }
 
 export async function roomQueueState(code: string) {
@@ -69,7 +133,7 @@ export async function roomQueueState(code: string) {
       playbackPosition: true,
       startedAt: true,
       revision: true,
-      tracks: { where: { removedAt: null }, orderBy: { position: "asc" } },
+      tracks: { where: { removedAt: null, playedAt: null }, orderBy: { position: "asc" } },
     },
   });
   if (!room) return null;

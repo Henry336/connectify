@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { effectivePosition } from "./playback";
 import type { Room, Track } from "./types";
 
@@ -26,7 +26,9 @@ function loadYouTubeApi() {
 
 type SyncReport = { drift: number; correcting: boolean; buffering: boolean };
 
-export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync, onPlaybackIntent }: {
+export type YouTubePlayerHandle = { unlockAudio: () => void };
+
+export const YouTubePlayer = forwardRef<YouTubePlayerHandle, {
   track: Track | null;
   room: Room;
   volume: number;
@@ -34,7 +36,9 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   onDuration: (duration: number) => void;
   onSync: (report: SyncReport) => void;
   onPlaybackIntent: (isPlaying: boolean, position: number) => boolean;
-}) {
+  onAutoplayBlocked: () => void;
+  onAudioUnlocked: () => void;
+}>(function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync, onPlaybackIntent, onAutoplayBlocked, onAudioUnlocked }, ref) {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const trackRef = useRef(track);
@@ -44,6 +48,8 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   const durationRef = useRef(onDuration);
   const syncRef = useRef(onSync);
   const playbackIntentRef = useRef(onPlaybackIntent);
+  const autoplayBlockedRef = useRef(onAutoplayBlocked);
+  const audioUnlockedRef = useRef(onAudioUnlocked);
   const loadedVideoRef = useRef<string | null>(null);
   const endedVideoRef = useRef<string | null>(null);
   const readyRef = useRef(false);
@@ -54,6 +60,17 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   durationRef.current = onDuration;
   syncRef.current = onSync;
   playbackIntentRef.current = onPlaybackIntent;
+  autoplayBlockedRef.current = onAutoplayBlocked;
+  audioUnlockedRef.current = onAudioUnlocked;
+
+  const checkAutoplay = () => {
+    window.setTimeout(() => {
+      const state = playerRef.current?.getPlayerState?.();
+      if (roomRef.current.isPlaying && state !== window.YT?.PlayerState?.PLAYING && state !== window.YT?.PlayerState?.BUFFERING) {
+        autoplayBlockedRef.current();
+      }
+    }, 2_200);
+  };
 
   const synchronize = (force = false) => {
     const player = playerRef.current;
@@ -75,7 +92,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
       loadedVideoRef.current = currentTrack.providerId;
       endedVideoRef.current = null;
       const request = { videoId: currentTrack.providerId, startSeconds: target };
-      if (currentRoom.isPlaying) player.loadVideoById(request);
+      if (currentRoom.isPlaying) { player.loadVideoById(request); checkAutoplay(); }
       else player.cueVideoById(request);
       player.setVolume(volumeRef.current);
       return;
@@ -86,7 +103,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
     const correcting = (force ? Math.abs(drift) > 0.45 : Math.abs(drift) > 1.25) && !buffering;
     if (correcting) player.seekTo(target, true);
     const playerState = player.getPlayerState?.();
-    if (currentRoom.isPlaying && playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.BUFFERING) player.playVideo();
+    if (currentRoom.isPlaying && playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.BUFFERING) { player.playVideo(); checkAutoplay(); }
     if (!currentRoom.isPlaying && playerState === window.YT.PlayerState.PLAYING) player.pauseVideo();
     syncRef.current({ drift, correcting, buffering });
   };
@@ -135,6 +152,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
               endedRef.current();
             }
             if (event.data === window.YT.PlayerState.PLAYING) reportDuration();
+            if (event.data === window.YT.PlayerState.PLAYING) audioUnlockedRef.current();
             if (event.data === window.YT.PlayerState.BUFFERING) syncRef.current({ drift: 0, correcting: false, buffering: true });
           },
           onError: () => syncRef.current({ drift: 0, correcting: false, buffering: true }),
@@ -160,7 +178,13 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
 
   useEffect(() => { synchronize(true); }, [track?.id, room.revision, room.isPlaying, room.playbackPosition, room.startedAt]);
   useEffect(() => { playerRef.current?.setVolume?.(volume); }, [volume]);
+  useImperativeHandle(ref, () => ({
+    unlockAudio: () => {
+      playerRef.current?.playVideo?.();
+      window.setTimeout(() => synchronize(true), 50);
+    },
+  }), []);
 
   const hasPlayableTrack = Boolean(track && !track.pending);
   return <div className={`youtube-player ${hasPlayableTrack ? "" : "is-empty"}`} ref={mountRef} aria-label={hasPlayableTrack ? `Playing ${track!.title}` : "YouTube player waiting for a track"} />;
-}
+});

@@ -38,7 +38,7 @@ sequenceDiagram
 | Creating or joining a room took 1–2 minutes after inactivity | Render Free could be asleep, Neon could also need a connection, and startup work began only after the user acted | Frontend calls `/ready` during bootstrap; `/ready` runs `SELECT 1`; Create and Join reuse one readiness promise | A sleeping free Render service can still take about a minute to start |
 | Buttons appeared unresponsive for about five seconds | The UI waited for database-backed server confirmation and full-room broadcasts | Play, pause, skip, votes, reactions, removal, reorder, and settings update optimistically; failures request a resync | Remote convergence still depends on network and database latency |
 | Joining performed duplicate loading | REST and Socket.IO paths both fetched room state | `room:join` now returns the initial snapshot and vote state in one acknowledgement | Reconnection/full resync still requires a snapshot |
-| Every action moved too much data | Full room snapshots were broadcast after small changes | Queue, playback, settings, votes, presence, moments, and chat use focused events and partial revisioned state | Explicit revision-gap detection is not implemented yet |
+| Every action moved too much data | Full room snapshots were broadcast after small changes | Queue, playback, settings, votes, presence, moments, and chat use focused events and partial revisioned state; clients recover automatically when a revision is skipped | A detected gap requires one fresh lightweight snapshot |
 | Adding a song took 5–10 seconds before anything appeared | Metadata resolution and database validation completed before rendering a queue item | A pending item appears immediately; successful responses replace it and failures remove it | A pasted URL can still wait on external metadata and the backend |
 | Adding a search result repeated metadata work | Search metadata was discarded and YouTube was queried again | Search result metadata is sent with the add request and reused when its provider ID matches the URL | Pasted URLs still require resolution when not cached |
 | Similar YouTube searches repeatedly consumed quota and time | Equivalent queries and concurrent requests were treated separately | Normalized query keys, a 15-minute bounded memory cache, 24-hour PostgreSQL cache, and in-flight request deduplication | An uncached result page still costs one YouTube search request |
@@ -98,7 +98,13 @@ The server response is still authoritative. If a command is rejected because per
 
 Every persisted room mutation increments `room.revision`. Incremental patches include that revision. The client refuses a patch older than its current revision, preventing a slow response from overwriting newer state.
 
-Current limitation: the client does not explicitly detect a jump such as revision 10 to revision 13. Full snapshots occur on initial join, reconnect, explicit `room:sync`, and rejected optimistic actions. Adding formal sequence-gap recovery is a future hardening step.
+The client now detects a jump such as revision 10 to revision 13. It temporarily ignores the incomplete patch, deduplicates concurrent recovery requests, requests one lightweight `room:sync` snapshot, and resumes from the authoritative revision. This closes the packet-loss and suspended-tab gap without returning to full snapshots for every action.
+
+### Retry-safe mutations
+
+Add, skip, vote, remove, and chat requests carry a browser-generated operation UUID. The server claims that UUID in `RoomOperation` before mutating state and stores the completed response. If an eight-second Socket.IO acknowledgement timeout causes the client to resend once, the server returns the stored result rather than applying the mutation twice. Track adds use the same UUID when retrying a failed network request.
+
+Incomplete claims become reclaimable after 30 seconds, and completed receipts are deleted after 24 hours. The existing unique track-vote constraint remains the final database-level guarantee that one participant cannot vote for the same track twice.
 
 ## 4. Queue and media-resolution path
 
@@ -114,6 +120,12 @@ The server:
 6. returns the created track before asynchronously broadcasting the new queue state.
 
 Pasted URL metadata uses a bounded 24-hour in-memory cache. YouTube oEmbed has a strict two-second timeout and a canonical-title/thumbnail fallback, so a metadata outage does not make the queue unusable.
+
+### Lightweight joins and on-demand history
+
+Initial joins now contain playback state, the current/fresh queue, recent moments, and only the newest 30 chat messages. They do not include the complete member roster or played-track history. Older messages load in 30-message pages as the user scrolls upward; members and listening history load only when their interfaces open and continue through bounded pages.
+
+This keeps persistent rooms fast as their history grows and avoids repeatedly transferring data that most listeners never open.
 
 ## 5. Playback clock and synchronization
 
@@ -162,7 +174,24 @@ Instead, `YouTubePlayer` checks whether a `PLAYING` or `PAUSED` transition came 
 
 This makes direct YouTube clicks and Connectify's custom controls converge on the same authoritative state.
 
-## 8. Instrumentation
+### Mobile audio recovery and Media Session
+
+When the authoritative room is playing but the YouTube iframe remains paused after a load, Connectify presents a visible, user-initiated **Tap to keep this room audible** control. Its click calls the iframe player directly, satisfying browsers that require a fresh user gesture. The prompt disappears as soon as YouTube reports real playback.
+
+Where the browser supports Media Session, Connectify publishes current title, artist, artwork, room name, playback state, position, and play/pause/previous/next/seek handlers to the operating system. These controls improve lock-screen and notification-panel integration but cannot override mobile background suspension or YouTube autoplay policy.
+
+## 8. Accountless ownership recovery
+
+The private host token doubles as a room recovery key:
+
+- the host can copy it from Host Controls;
+- a locked-room failure screen accepts it before retrying the join;
+- an unlocked-room guest can recover host access from the room menu;
+- a host can hand the room to a currently connected member.
+
+Recovery from another identity and explicit handoff both generate a replacement secret, update the room owner, demote the former host, and invalidate the previous key. The new key is delivered only to the new host’s connected client and stored in that browser. No account or email address is required.
+
+## 9. Instrumentation
 
 ### Browser
 
@@ -198,7 +227,7 @@ browser feedback → transport → server handler → database → broadcast →
 
 This prevents a YouTube buffering delay from being mistaken for a database delay, or a Render cold start from being mistaken for a slow room query.
 
-## 9. Production verification runbook
+## 10. Production verification runbook
 
 Test with at least two desktop browsers and two phones:
 
@@ -213,14 +242,18 @@ Test with at least two desktop browsers and two phones:
 9. Disconnect and restore a network, then verify revision-safe recovery.
 10. Remove the active track and confirm the iframe becomes empty.
 11. Repeat under network throttling and with one browser intentionally several seconds behind.
+12. Force an acknowledgement timeout and confirm the repeated operation creates only one queue item, vote, removal, skip, or message.
+13. Scroll chat upward, load earlier dates, reply and mention another listener, then verify unread and jump-to-latest behavior in a background tab.
+14. Open roster and listening history and confirm their later pages load only on demand.
+15. Recover the room in a second browser, confirm the first key stops working, then hand the room to an online participant and confirm the key rotates again.
+16. On a phone, exercise the audio-unlock prompt and available lock-screen Media Session actions.
 
-## 10. Known limits and next steps
+## 11. Known limits and next steps
 
 - Render Free cold starts cannot be eliminated without an always-on service.
 - Browser and mobile operating-system media policies cannot be bypassed.
 - YouTube controls media availability, embeddability, buffering, ads, and regional restrictions.
 - One Render instance owns in-memory presence and timers. Horizontal scaling requires a Socket.IO adapter and distributed scheduling.
-- Formal revision-gap detection would make incremental event recovery stronger.
 - Durable aggregated latency dashboards are not implemented; current metrics are browser events, response headers, and structured logs.
 
 ## Source map
@@ -236,4 +269,3 @@ Test with at least two desktop browsers and two phones:
 | YouTube URL and metadata resolution | `server/src/youtube.ts` |
 | Search caching and request deduplication | `server/src/search-service.ts` |
 | Permission and ending rules | `server/src/room-policy.ts` |
-

@@ -14,6 +14,7 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Fair Queue contributor rotation with one vote per person and song
 - Opt-in DJ Autopilot that revives crowd favorites after fresh picks run out
 - Persistent timestamped Moments with synchronized replay
+- Room-wide chat with unread tracking, replies, mentions, spoilers, date separators, optional alerts, and paginated history
 - Live, shareable Room DNA generated from session activity
 - Five shared Party Modes: Standard, Pass the AUX, Blind Pick, One Take, and Discovery Night
 - Persistent member roster, listening history, room themes, and recent-room shortcuts
@@ -21,6 +22,10 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Watch Party mode with theater layout, timestamped persistent chat, spoiler hiding, and moment jumping
 - Queue intelligence with duplicate blocking, Play Next, learned durations, ETAs, and undo removal
 - Clock-skew-safe playback timing, continuous drift correction, connection health, and host resync
+- Automatic revision-gap recovery plus retry-safe add, skip, vote, remove, and chat mutations
+- Lazy room snapshots with paginated chat, listening history, and member rosters
+- Accountless recovery keys and secure host handoff with automatic key rotation
+- Mobile autoplay recovery guidance and Media Session lock-screen controls where supported
 - Live listener presence
 - Responsive room and mobile player interface
 
@@ -55,6 +60,8 @@ The checked-in `render.yaml` configures a Singapore Web Service. If configuring 
 - `YOUTUBE_API_KEY` to a Google Cloud API key with YouTube Data API v3 enabled (optional, but required for live YouTube search)
 
 Keep the Neon project in AWS Singapore when possible. Existing Render services should also be checked in the Dashboard because changing `render.yaml` does not relocate an already-created service. Prisma migrations run during deployment rather than every server wake-up.
+
+The reliability release adds the `RoomOperation` idempotency table and chat reply relation. Render’s existing build command already runs `npm run db:deploy`, so the checked-in migration is applied automatically before the updated server starts. Deploy the backend before or alongside the frontend; no new environment variables are required.
 
 The frontend calls `/ready` as soon as someone opens the landing page or a direct room link. This wakes Render and executes a minimal Neon query while the visitor is reading the page. A free Render web service can still require a cold start after inactivity; pre-warming moves that delay earlier but cannot guarantee an instant first request.
 

@@ -39,6 +39,8 @@ export type ChatMessage = {
   body: string;
   position: number | null;
   spoiler: boolean;
+  replyToId: string | null;
+  replyTo: { id: string; name: string; body: string; spoiler: boolean } | null;
   createdAt: string;
 };
 
@@ -47,6 +49,7 @@ export type RoomTheme = "violet" | "sunset" | "ocean" | "mono";
 
 export type RoomMember = {
   id: string;
+  userId: string;
   name: string;
   avatar: string;
   role: "host" | "guest";
@@ -78,10 +81,12 @@ export type Room = {
   queueOrder: string[];
   moments: Moment[];
   members: RoomMember[];
+  memberCount: number;
   messages: ChatMessage[];
+  hasMoreMessages: boolean;
 };
 
-export type Person = { id: string; name: string; avatar: string; role: "host" | "guest" };
+export type Person = { id: string; userId: string; name: string; avatar: string; role: "host" | "guest" };
 
 export type SearchItem = {
   providerId: string;

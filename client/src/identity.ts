@@ -35,6 +35,11 @@ export function saveHostToken(code: string, token: string) {
   localStorage.setItem(`connectify.host.${code.toUpperCase()}`, token);
 }
 
+export function removeHostToken(code: string) {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(`connectify.host.${code.toUpperCase()}`);
+}
+
 export type RecentRoom = { code: string; name: string; lastVisited: number };
 
 export function getRecentRooms(): RecentRoom[] {

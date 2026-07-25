@@ -20,7 +20,7 @@ export function ShareTarget() {
   const add = async (code: string) => {
     setAddingTo(code); setError("");
     try {
-      await api(`/api/rooms/${code}/tracks`, { method: "POST", body: JSON.stringify({ url, addedBy: identity.name, userId: identity.userId, hostToken: getHostToken(code), placement: "last" }) });
+      await api(`/api/rooms/${code}/tracks`, { method: "POST", body: JSON.stringify({ url, addedBy: identity.name, userId: identity.userId, hostToken: getHostToken(code), placement: "last", operationId: crypto.randomUUID() }) });
       window.location.href = `/room/${code}`;
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not add that video."); setAddingTo(""); }
   };

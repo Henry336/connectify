@@ -32,6 +32,7 @@ model Room {
   moments          Moment[]
   members          RoomMember[]
   messages         ChatMessage[]
+  operations       RoomOperation[]
 }
 
 model Track {
@@ -117,10 +118,28 @@ model ChatMessage {
   body      String
   position  Float?
   spoiler   Boolean  @default(false)
+  replyToId String?
+  replyTo   ChatMessage?  @relation("ChatReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   ChatMessage[] @relation("ChatReplies")
   createdAt DateTime @default(now())
 
   @@index([roomId, createdAt])
   @@index([trackId, position])
+  @@index([replyToId])
+}
+
+model RoomOperation {
+  id          String    @id
+  roomId      String
+  room        Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId      String
+  action      String
+  result      Json?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([roomId, createdAt])
+  @@index([createdAt])
 }
 
 model SearchCache {
