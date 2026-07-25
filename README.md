@@ -100,7 +100,9 @@ The PWA share target appears after installing Connectify from a compatible brows
 - `server/`: Express, Socket.IO, Prisma
 - `server/prisma/`: PostgreSQL schema and migrations
 
-The server owns room state. Clients send intentions, the server persists the mutation, and every listener receives a new authoritative snapshot. On reconnect, the stored timestamp and position allow the player to catch up.
+The server owns room state. Clients apply actions optimistically, send intentions, and converge on revisioned incremental server patches. Full snapshots are reserved for joining and explicit recovery. On reconnect, the stored timestamp and position allow the player to catch up.
+
+For a symptom-by-symptom explanation of the original delays, their root causes, the optimized request and playback paths, instrumentation, trade-offs, and the production test runbook, read [Performance and Reliability Architecture](docs/PERFORMANCE_AND_RELIABILITY.md).
 
 ## Production follow-ups
 
