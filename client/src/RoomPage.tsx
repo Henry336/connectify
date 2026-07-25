@@ -425,7 +425,7 @@ export function RoomPage({ code }: { code: string }) {
   return <main className={`room-shell theme-${room.theme} ${room.partyMode === "watch_party" ? "watch-party" : ""}`}>
     <header className="room-nav">
       <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
-      <div className="room-title-mobile"><strong>{room.name}</strong><span><i /> Live</span></div>
+      <div className="room-title-mobile"><strong>{room.name}</strong><span><Radio aria-hidden="true" /> Live</span></div>
       <div className="room-nav-actions">
         <div className="listeners"><div className="avatar-stack">{people.slice(0, 4).map((person, index) => <i key={person.id} title={`${person.name}${person.role === "host" ? " · Host" : ""}`}>{person.avatar || avatars[index]}</i>)}</div><span>{people.length} listening</span></div>
         <button className={`sync-pill ${connectionState !== "connected" || syncHealth.buffering ? "waiting" : syncHealth.correcting ? "correcting" : ""}`} onClick={resyncEveryone} disabled={!isHost || !current} title={isHost ? "Resync everyone" : "Playback synchronization health"}>{connectionState === "connected" ? <Wifi /> : <WifiOff />}<span>{connectionState !== "connected" ? "Reconnecting" : syncHealth.buffering ? "Buffering" : syncHealth.correcting ? "Correcting" : `In sync · ${Math.abs(syncHealth.drift).toFixed(1)}s`}</span></button>
@@ -436,7 +436,7 @@ export function RoomPage({ code }: { code: string }) {
 
     <section className="room-content">
       <div className="listening-pane">
-        <div className="room-heading"><a href="/" aria-label="Leave room"><ArrowLeft /></a><div><div className="live-label"><i /> LIVE ROOM · {room.code} · {modeName(room.partyMode).toUpperCase()}</div><h1>{room.name}</h1></div></div>
+        <div className="room-heading"><a href="/" aria-label="Leave room"><ArrowLeft /></a><div><div className="live-label"><Radio aria-hidden="true" /> LIVE ROOM · {room.code} · {modeName(room.partyMode).toUpperCase()}</div><h1>{room.name}</h1></div></div>
         {room.partyMode !== "standard" && <div className="party-mode-banner"><Gamepad2 /><div><strong>{modeName(room.partyMode)}</strong><span>{partyModes.find((mode) => mode.id === room.partyMode)?.description}</span></div>{isHost && <button onClick={() => setPartyOpen(true)}>Change</button>}</div>}
         <div className="now-card">
           <div className="video-stage">

@@ -54,7 +54,7 @@ export function Landing() {
         <h1>Good songs are<br /><em>better together.</em></h1>
         <p>Create a room, drop a YouTube link, and press play. Hear the same song or watch the same video together—wherever everyone is.</p>
         <button className="primary hero-action" onClick={() => document.querySelector(".room-card")?.scrollIntoView({ behavior: "smooth" })}>Start listening <ArrowRight size={18} /></button>
-        <div className="trust-row"><span><span className="live-dot" /> No account needed</span><span>Free to start</span></div>
+        <div className="trust-row"><span><Radio className="trust-signal" aria-hidden="true" /> No account needed</span><span>Free to start</span></div>
       </div>
 
       <div className="hero-visual" aria-hidden="true">
