@@ -26,13 +26,14 @@ function loadYouTubeApi() {
 
 type SyncReport = { drift: number; correcting: boolean; buffering: boolean };
 
-export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync }: {
+export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync, onPlaybackIntent }: {
   track: Track | null;
   room: Room;
   volume: number;
   onEnded: () => void;
   onDuration: (duration: number) => void;
   onSync: (report: SyncReport) => void;
+  onPlaybackIntent: (isPlaying: boolean, position: number) => boolean;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -42,6 +43,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   const endedRef = useRef(onEnded);
   const durationRef = useRef(onDuration);
   const syncRef = useRef(onSync);
+  const playbackIntentRef = useRef(onPlaybackIntent);
   const loadedVideoRef = useRef<string | null>(null);
   const endedVideoRef = useRef<string | null>(null);
   const readyRef = useRef(false);
@@ -51,6 +53,7 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   endedRef.current = onEnded;
   durationRef.current = onDuration;
   syncRef.current = onSync;
+  playbackIntentRef.current = onPlaybackIntent;
 
   const synchronize = (force = false) => {
     const player = playerRef.current;
@@ -117,6 +120,16 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
           },
           onStateChange: (event: any) => {
             const currentTrack = trackRef.current;
+            const playbackIntent = event.data === window.YT.PlayerState.PLAYING ? true : event.data === window.YT.PlayerState.PAUSED ? false : null;
+            const iframe = playerRef.current?.getIframe?.() as HTMLIFrameElement | undefined;
+            const playerWasFocused = Boolean(iframe && document.activeElement === iframe);
+            if (playbackIntent !== null && playerWasFocused) {
+              iframe?.blur();
+              if (!document.hidden && currentTrack && !currentTrack.pending && playbackIntent !== roomRef.current.isPlaying) {
+                const accepted = playbackIntentRef.current(playbackIntent, Number(playerRef.current?.getCurrentTime?.() || 0));
+                if (!accepted) window.setTimeout(() => synchronize(true), 0);
+              }
+            }
             if (event.data === window.YT.PlayerState.ENDED && currentTrack && endedVideoRef.current !== currentTrack.providerId) {
               endedVideoRef.current = currentTrack.providerId;
               endedRef.current();

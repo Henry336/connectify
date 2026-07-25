@@ -440,7 +440,11 @@ export function RoomPage({ code }: { code: string }) {
         {room.partyMode !== "standard" && <div className="party-mode-banner"><Gamepad2 /><div><strong>{modeName(room.partyMode)}</strong><span>{partyModes.find((mode) => mode.id === room.partyMode)?.description}</span></div>{isHost && <button onClick={() => setPartyOpen(true)}>Change</button>}</div>}
         <div className="now-card">
           <div className="video-stage">
-            <YouTubePlayer track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => current && socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} />
+            <YouTubePlayer track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => current && socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} onPlaybackIntent={(isPlaying, position) => {
+              if (!current || !canControl) return false;
+              setPlayback(current, isPlaying, position);
+              return true;
+            }} />
             {!current && <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
             <div className="stage-vignette" />
             <div className="moment-burst-layer">{momentBursts.filter((moment) => moment.trackId === current?.id).map((moment, index) => <span key={moment.id} style={{ "--burst-x": `${18 + index * 16}%` } as React.CSSProperties}><b>{moment.emoji}</b><small>{moment.name}</small></span>)}</div>
@@ -508,6 +512,6 @@ function SearchResult({ item, canControl, adding, onAdd }: { item: SearchItem; c
   return <article className="search-result">
     <img src={item.thumbnail || "/connectify.svg"} alt="" loading="lazy" />
     <div><strong>{item.title}</strong><span>{item.artist}</span><small>{item.source === "connectify" ? "Connectify Library" : "YouTube"}</small></div>
-    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)}><Plus />Add</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)}><ListPlus />Next</button>}</div>
+    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)} title="Add through the normal fair queue"><Plus />Add to queue</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)} title="Play immediately after the current video"><ListPlus />Play next</button>}</div>
   </article>;
 }
