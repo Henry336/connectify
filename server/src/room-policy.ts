@@ -24,6 +24,15 @@ export function advanceAllowed(partyMode: string, reason: "manual" | "ended") {
   return partyMode !== "one_take" || reason === "ended";
 }
 
+export function publicJoinFailure(error: unknown) {
+  const candidate = error as { code?: string; message?: string } | null;
+  const schemaUnavailable = candidate?.code === "P2022"
+    || /column .* does not exist|migration|schema/i.test(String(candidate?.message || ""));
+  return schemaUnavailable
+    ? { ok: false as const, code: "SERVICE_UPDATING", retryable: true, error: "Connectify is finishing an update. Your room is safe; retrying automatically…" }
+    : { ok: false as const, code: "JOIN_FAILED", retryable: true, error: "Connectify could not finish joining yet. Retrying automatically…" };
+}
+
 export function endedPlaybackAllowed(input: {
   currentTrackId: string | null;
   expectedTrackId: string;

@@ -6,7 +6,7 @@ import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
 import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
-import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
+import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { searchConnectifyLibrary, searchYouTube } from "./search-service.js";
 import { resolveTrack } from "./youtube.js";
 
@@ -415,7 +415,7 @@ io.on("connection", (socket) => {
         ]);
       }
       const denial = joinRoomDenial({ isLocked: room.isLocked, isReturning: Boolean(existing), isHost, isBanned: Boolean(existing?.isBanned) });
-      if (denial) return reply({ ok: false, error: denial });
+      if (denial) return reply({ ok: false, code: existing?.isBanned ? "REMOVED" : "ACCESS_DENIED", error: denial });
       const presentIds = new Set(uniquePresence(code).map((person) => person.userId));
       const reservations = joinReservations.get(code) || new Set<string>();
       joinReservations.set(code, reservations);
@@ -471,7 +471,8 @@ io.on("connection", (socket) => {
       reply({ ok: true, role, hostToken: issuedHostToken, snapshot, votes: votes.map((vote) => vote.trackId) });
       void scheduleRoomEnd(code);
     } catch (error: any) {
-      reply({ ok: false, error: error?.message || "Could not join room." });
+      console.error("Room join failed:", error);
+      reply(publicJoinFailure(error));
     } finally {
       releaseReservation?.();
     }

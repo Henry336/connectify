@@ -65,7 +65,7 @@ The checked-in `render.yaml` configures a Singapore Web Service. If configuring 
 - `METRICS_ADMIN_TOKEN` to a long random value if you want the protected Web Vitals summary (optional)
 - `DB_TIMINGS=all` only during a short measurement window if you need every query timing; production otherwise logs only queries taking at least 50 ms
 
-Keep the Neon project in AWS Singapore when possible. Existing Render services should also be checked in the Dashboard because changing `render.yaml` does not relocate an already-created service. Prisma migrations run during deployment rather than every server wake-up.
+Keep the Neon project in AWS Singapore when possible. Existing Render services should also be checked in the Dashboard because changing `render.yaml` does not relocate an already-created service. Prisma migrations run during deployment. As a safety net for manually configured Render services, `npm start` also applies pending migrations before accepting traffic; already-applied migrations are a no-op.
 
 The reliability release adds the `RoomOperation` idempotency table and chat reply relation. Render’s existing build command already runs `npm run db:deploy`, so the checked-in migration is applied automatically before the updated server starts. Deploy the backend before or alongside the frontend; no new environment variables are required.
 

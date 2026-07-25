@@ -76,6 +76,8 @@ export function RoomPage({ code }: { code: string }) {
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
+  const [joinErrorCode, setJoinErrorCode] = useState<string | null>(null);
+  const [joinNotice, setJoinNotice] = useState("");
   const [copied, setCopied] = useState(false);
   const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(() => new Set());
   const [volume, setVolume] = useState(() => {
@@ -185,6 +187,7 @@ export function RoomPage({ code }: { code: string }) {
     let active = true;
     const wakingTimer = window.setTimeout(() => setWakingRoom(true), 500);
     let connection: Socket | null = null;
+    let joinRetryTimer: number | null = null;
     let recoveryInFlight = false;
     const recoverRevisionGap = () => {
       if (!connection || recoveryInFlight) return;
@@ -215,20 +218,40 @@ export function RoomPage({ code }: { code: string }) {
       connection = io(API_URL, { transports: ["websocket", "polling"], reconnectionDelay: 250, reconnectionDelayMax: 2_000 });
       connection.on("connect", () => {
         setConnectionState("connected");
-        const startedAt = performance.now();
-        connection!.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; error?: string; snapshot?: Room; votes?: string[] }) => {
-          recordClientTiming("socket:room:join", performance.now() - startedAt);
-          if (!result?.ok || !result.snapshot) { setRoom(null); setError(result?.error || "Could not join this room."); connection?.disconnect(); return; }
-          const received = withReceipt(result.snapshot);
-          window.clearTimeout(wakingTimer);
-          setWakingRoom(false);
-          rememberRoom(received.code, received.name);
-          setRoom(received);
-          setHasMoreChat(received.hasMoreMessages);
-          setVotedTrackIds(new Set(result.votes || []));
-          setRole(result.role || "guest");
-          if (result.hostToken) saveHostToken(code, result.hostToken);
-        });
+        const join = (attempt = 0) => {
+          const startedAt = performance.now();
+          connection!.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; code?: string; retryable?: boolean; error?: string; snapshot?: Room; votes?: string[] }) => {
+            recordClientTiming("socket:room:join", performance.now() - startedAt);
+            if (!result?.ok || !result.snapshot) {
+              if (result?.retryable && attempt < 20 && connection?.connected) {
+                setWakingRoom(true);
+                setJoinNotice(result.error || "Connectify is finishing an update. Retrying automatically…");
+                joinRetryTimer = window.setTimeout(() => join(attempt + 1), Math.min(8_000, 1_500 + attempt * 500));
+                return;
+              }
+              setRoom(null);
+              setJoinNotice("");
+              setJoinErrorCode(result?.code || "JOIN_FAILED");
+              setError(result?.error || "Could not join this room. Please retry.");
+              connection?.disconnect();
+              return;
+            }
+            const received = withReceipt(result.snapshot);
+            window.clearTimeout(wakingTimer);
+            if (joinRetryTimer !== null) window.clearTimeout(joinRetryTimer);
+            setWakingRoom(false);
+            setJoinNotice("");
+            setJoinErrorCode(null);
+            setError("");
+            rememberRoom(received.code, received.name);
+            setRoom(received);
+            setHasMoreChat(received.hasMoreMessages);
+            setVotedTrackIds(new Set(result.votes || []));
+            setRole(result.role || "guest");
+            if (result.hostToken) saveHostToken(code, result.hostToken);
+          });
+        };
+        join();
       });
       connection.on("disconnect", () => setConnectionState("reconnecting"));
       connection.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
@@ -313,7 +336,7 @@ export function RoomPage({ code }: { code: string }) {
       });
       setSocket(connection);
     });
-    return () => { active = false; window.clearTimeout(wakingTimer); connection?.disconnect(); };
+    return () => { active = false; window.clearTimeout(wakingTimer); if (joinRetryTimer !== null) window.clearTimeout(joinRetryTimer); connection?.disconnect(); };
   }, [code]);
 
   useEffect(() => {
@@ -816,7 +839,21 @@ export function RoomPage({ code }: { code: string }) {
 
   if (!room) return <main className="room-loading">
     <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
-    {error ? <section className="loading-failure"><span><WifiOff /></span><h2>{error}</h2><form className="recovery-import" onSubmit={(event) => { event.preventDefault(); if (!recoveryInput.trim()) return; saveHostToken(code, recoveryInput.trim()); window.location.reload(); }}><label htmlFor="recovery-key"><KeyRound /> Have this room’s recovery key?</label><div><input id="recovery-key" value={recoveryInput} onChange={(event) => setRecoveryInput(event.target.value)} placeholder="Paste recovery key" autoComplete="off" /><button>Retry as host</button></div></form><a href="/">Go back home</a></section> :
+    {error ? <section className="loading-failure">
+      <span><WifiOff /></span>
+      <h2>{error}</h2>
+      {joinErrorCode === "ACCESS_DENIED" && <form className="recovery-import" onSubmit={(event) => {
+        event.preventDefault();
+        if (!recoveryInput.trim()) return;
+        saveHostToken(code, recoveryInput.trim());
+        window.location.reload();
+      }}>
+        <label htmlFor="recovery-key"><KeyRound /> Have this room’s recovery key?</label>
+        <div><input id="recovery-key" value={recoveryInput} onChange={(event) => setRecoveryInput(event.target.value)} placeholder="Paste recovery key" autoComplete="off" /><button>Retry as host</button></div>
+      </form>}
+      <button className="secondary" onClick={() => window.location.reload()}>Retry joining</button>
+      <a href="/">Go back home</a>
+    </section> :
       <section className="connect-loader" role="status" aria-live="polite">
         <div className="connection-visual" aria-hidden="true">
           <i className="signal-ring" /><i className="signal-ring" /><i className="signal-ring" />
@@ -826,8 +863,8 @@ export function RoomPage({ code }: { code: string }) {
           <span className="signal-core"><Radio /></span>
         </div>
         <div className="loading-equalizer" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
-        <p>{wakingRoom ? "Waking Connectify" : `Tuning in to ${code}`}<span className="loader-dots" aria-hidden="true"><i /><i /><i /></span></p>
-        <small>{wakingRoom ? "Bringing the room and its queue online" : "Syncing the room with everyone"}</small>
+        <p>{joinNotice || (wakingRoom ? "Waking Connectify" : `Tuning in to ${code}`)}{!joinNotice && <span className="loader-dots" aria-hidden="true"><i /><i /><i /></span>}</p>
+        <small>{joinNotice ? "Your existing room and queue are unchanged." : wakingRoom ? "Bringing the room and its queue online" : "Syncing the room with everyone"}</small>
       </section>}
   </main>;
 

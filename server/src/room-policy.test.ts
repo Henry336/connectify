@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
+import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 
 test("locked rooms allow hosts and returning members but reject strangers", () => {
   assert.equal(joinRoomDenial({ isLocked: true, isReturning: false, isHost: false, isBanned: false }), "This room is locked to returning members.");
@@ -46,4 +46,14 @@ test("only a current track near its authoritative end can advance the room", () 
   assert.equal(endedPlaybackAllowed({ ...base, expectedTrackId: "stale" }), false);
   assert.equal(endedPlaybackAllowed({ ...base, isPlaying: false }), false);
   assert.equal(endedPlaybackAllowed({ ...base, duration: null }), false);
+});
+
+test("database deployment faults are retryable without leaking internal details", () => {
+  const internal = "Invalid `prisma.room.findUnique()` invocation: column Room.maxParticipants does not exist";
+  const failure = publicJoinFailure({ code: "P2022", message: internal });
+  assert.equal(failure.code, "SERVICE_UPDATING");
+  assert.equal(failure.retryable, true);
+  assert.equal(failure.error.includes("maxParticipants"), false);
+  assert.equal(failure.error.includes("prisma"), false);
+  assert.match(failure.error, /room is safe/i);
 });
