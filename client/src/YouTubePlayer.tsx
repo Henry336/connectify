@@ -56,7 +56,17 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
     const player = playerRef.current;
     const currentTrack = trackRef.current;
     const currentRoom = roomRef.current;
-    if (!readyRef.current || !player || !currentTrack || currentTrack.pending) return;
+    if (!readyRef.current || !player) return;
+    if (!currentTrack || currentTrack.pending) {
+      if (loadedVideoRef.current !== null) {
+        player.stopVideo?.();
+        player.clearVideo?.();
+        loadedVideoRef.current = null;
+        endedVideoRef.current = null;
+      }
+      syncRef.current({ drift: 0, correcting: false, buffering: false });
+      return;
+    }
     const target = Math.max(0, effectivePosition(currentRoom));
     if (loadedVideoRef.current !== currentTrack.providerId) {
       loadedVideoRef.current = currentTrack.providerId;
@@ -138,5 +148,6 @@ export function YouTubePlayer({ track, room, volume, onEnded, onDuration, onSync
   useEffect(() => { synchronize(true); }, [track?.id, room.revision, room.isPlaying, room.playbackPosition, room.startedAt]);
   useEffect(() => { playerRef.current?.setVolume?.(volume); }, [volume]);
 
-  return <div className="youtube-player" ref={mountRef} aria-label={track ? `Playing ${track.title}` : "YouTube player waiting for a track"} />;
+  const hasPlayableTrack = Boolean(track && !track.pending);
+  return <div className={`youtube-player ${hasPlayableTrack ? "" : "is-empty"}`} ref={mountRef} aria-label={hasPlayableTrack ? `Playing ${track!.title}` : "YouTube player waiting for a track"} />;
 }
