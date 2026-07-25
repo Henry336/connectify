@@ -46,14 +46,17 @@ The frontend runs on `http://localhost:5173`; the API runs on `http://localhost:
 
 ### Render backend with Neon PostgreSQL
 
-Create a Render Web Service from this repository with Root Directory `server`, Build Command `npm install && npm run build`, and Start Command `npm start`. Set:
+The checked-in `render.yaml` configures a Singapore Web Service. If configuring it manually, use Root Directory `server`, Build Command `npm install && npm run build && npm run db:deploy`, and Start Command `npm start`. Set:
 
 - `CLIENT_URL=https://your-connectify.vercel.app`
-- `DATABASE_URL` to the direct Neon PostgreSQL connection string
+- `DATABASE_URL` to Neon’s pooled PostgreSQL connection string (the hostname contains `-pooler`)
 - `NODE_VERSION=22`
+- `NODE_ENV=production`
 - `YOUTUBE_API_KEY` to a Google Cloud API key with YouTube Data API v3 enabled (optional, but required for live YouTube search)
 
-Render runs pending Prisma migrations whenever the service starts. A free Render web service may sleep, so the first room request after inactivity can take longer.
+Keep the Neon project in AWS Singapore when possible. Existing Render services should also be checked in the Dashboard because changing `render.yaml` does not relocate an already-created service. Prisma migrations run during deployment rather than every server wake-up.
+
+The frontend calls `/ready` as soon as someone opens the landing page or a direct room link. This wakes Render and executes a minimal Neon query while the visitor is reading the page. A free Render web service can still require a cold start after inactivity; pre-warming moves that delay earlier but cannot guarantee an instant first request.
 
 ### Vercel frontend
 
@@ -61,9 +64,25 @@ Import the repository into Vercel and configure:
 
 - Root Directory: `client`
 - Framework Preset: Vite
-- Environment variable: `VITE_API_URL=https://your-connectify-api.onrender.com`
+- `VITE_API_URL=https://your-connectify-api.onrender.com`
+- `VITE_SITE_URL=https://your-connectify.vercel.app`
+- `VITE_GOOGLE_SITE_VERIFICATION=...` after Google Search Console provides the verification token (optional)
 
-`client/vercel.json` keeps direct room URLs working with client-side routing.
+Use the stable production Vercel URL—not a preview deployment—for `VITE_SITE_URL`, then redeploy. `client/vercel.json` keeps direct room URLs working and sends `noindex` headers for private room and share-target pages. Preview builds generate `noindex` public pages automatically.
+
+### Search indexing
+
+The client build prerenders `/`, `/listen-together`, `/watch-party`, `/features`, `/how-it-works`, `/faq`, `/privacy`, and `/terms`. It also generates production-aware canonical metadata, `robots.txt`, `sitemap.xml`, Open Graph metadata, and truthful `WebApplication` structured data.
+
+After the production Vercel deployment:
+
+1. Add the production URL as a URL-prefix property in Google Search Console.
+2. Save Google’s HTML-tag token as `VITE_GOOGLE_SITE_VERIFICATION` in Vercel and redeploy.
+3. Submit `https://your-connectify.vercel.app/sitemap.xml`.
+4. Add the same site to Bing Webmaster Tools, or import it from Search Console.
+5. Inspect `/`, `/listen-together`, and `/watch-party`; do not request indexing for `/room/*`.
+
+Room codes, names, messages, and member lists are never included in the sitemap. AdSense is intentionally not loaded; active room/player pages are not suitable ad surfaces.
 
 ### Search and quota behavior
 

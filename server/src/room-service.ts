@@ -60,6 +60,39 @@ export async function roomSnapshot(code: string) {
   return { ...publicRoom, moments: room.moments.reverse(), messages: room.messages.reverse(), queueOrder, serverTime: new Date().toISOString() };
 }
 
+export async function roomQueueState(code: string) {
+  const room = await prisma.room.findUnique({
+    where: { code: code.toUpperCase() },
+    select: {
+      currentTrackId: true,
+      isPlaying: true,
+      playbackPosition: true,
+      startedAt: true,
+      revision: true,
+      tracks: { where: { removedAt: null }, orderBy: { position: "asc" } },
+    },
+  });
+  if (!room) return null;
+  return {
+    currentTrackId: room.currentTrackId,
+    isPlaying: room.isPlaying,
+    playbackPosition: room.playbackPosition,
+    startedAt: room.startedAt,
+    revision: room.revision,
+    tracks: room.tracks,
+    queueOrder: [room.currentTrackId, ...fairQueueOrder(room.tracks, room.currentTrackId)].filter(Boolean),
+    serverTime: new Date().toISOString(),
+  };
+}
+
+export async function roomPlaybackState(code: string) {
+  const room = await prisma.room.findUnique({
+    where: { code: code.toUpperCase() },
+    select: { currentTrackId: true, isPlaying: true, playbackPosition: true, startedAt: true, revision: true },
+  });
+  return room ? { ...room, serverTime: new Date().toISOString() } : null;
+}
+
 export function createRoomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronRight, Copy, Dna, EyeOff, Gamepad2, Heart, History, Info, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Undo2, UserMinus, Users, Volume2, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
-import { api, API_URL } from "./api";
+import { api, API_URL, recordClientTiming, waitForBackend } from "./api";
 import { getHostToken, getIdentity, rememberRoom, saveHostToken } from "./identity";
 import { effectivePosition, withReceipt } from "./playback";
 import type { ChatMessage, Moment, PartyMode, Person, Room, RoomTheme, SearchItem, Track } from "./types";
@@ -66,6 +66,7 @@ export function RoomPage({ code }: { code: string }) {
   const [chatSpoiler, setChatSpoiler] = useState(false);
   const [revealedSpoilers, setRevealedSpoilers] = useState<Set<string>>(() => new Set());
   const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "reconnecting">("connecting");
+  const [wakingRoom, setWakingRoom] = useState(false);
   const [syncHealth, setSyncHealth] = useState({ drift: 0, correcting: false, buffering: false });
   const [removedTrack, setRemovedTrack] = useState<{ trackId: string; title: string } | null>(null);
   const [localResults, setLocalResults] = useState<SearchItem[]>([]);
@@ -80,29 +81,57 @@ export function RoomPage({ code }: { code: string }) {
 
   useEffect(() => {
     let active = true;
-    api<Room>(`/api/rooms/${code}`).then((data) => { if (active) { const received = withReceipt(data); rememberRoom(data.code, data.name); setRoom((previous) => !previous || data.revision >= previous.revision ? received : previous); } }).catch((err) => setError(err.message));
-    const connection = io(API_URL, { transports: ["websocket", "polling"] });
-    connection.on("connect", () => { setConnectionState("connected"); connection.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; error?: string }) => {
-      if (!result?.ok) { setRoom(null); setError(result?.error || "Could not join this room."); connection.disconnect(); return; }
-      setRole(result.role || "guest");
-      if (result.hostToken) saveHostToken(code, result.hostToken);
-    }); });
-    connection.on("disconnect", () => setConnectionState("reconnecting"));
-    connection.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
-    connection.on("room:snapshot", (snapshot: Room) => { const received = withReceipt(snapshot); setRoom((previous) => !previous || snapshot.revision >= previous.revision ? received : previous); });
-    connection.on("room:presence", setPeople);
-    connection.on("queue:votes", (ids: string[]) => setVotedTrackIds(new Set(ids)));
-    connection.on("queue:vote-updated", ({ trackId, votes }: { trackId: string; votes: number }) => setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes } : track) } : previous));
-    connection.on("room:moment", (moment: Moment) => {
-      setRoom((previous) => previous ? { ...previous, moments: [...previous.moments, moment].slice(-60) } : previous);
-      setMomentBursts((previous) => [...previous, moment].slice(-5));
-      window.setTimeout(() => setMomentBursts((previous) => previous.filter((item) => item.id !== moment.id)), 2600);
+    const wakingTimer = window.setTimeout(() => setWakingRoom(true), 500);
+    let connection: Socket | null = null;
+    const mergeIncremental = (patch: Partial<Room> & { revision: number; serverTime?: string }) => {
+      setRoom((previous) => {
+        if (!previous || patch.revision < previous.revision) return previous;
+        return withReceipt({ ...previous, ...patch, serverTime: patch.serverTime || new Date().toISOString() });
+      });
+    };
+    void waitForBackend().then(() => {
+      if (!active) return;
+      connection = io(API_URL, { transports: ["websocket", "polling"], reconnectionDelay: 250, reconnectionDelayMax: 2_000 });
+      connection.on("connect", () => {
+        setConnectionState("connected");
+        const startedAt = performance.now();
+        connection!.emit("room:join", { code, ...identity, hostToken: getHostToken(code) }, (result: { ok: boolean; role?: "host" | "guest"; hostToken?: string; error?: string; snapshot?: Room; votes?: string[] }) => {
+          recordClientTiming("socket:room:join", performance.now() - startedAt);
+          if (!result?.ok || !result.snapshot) { setRoom(null); setError(result?.error || "Could not join this room."); connection?.disconnect(); return; }
+          const received = withReceipt(result.snapshot);
+          window.clearTimeout(wakingTimer);
+          setWakingRoom(false);
+          rememberRoom(received.code, received.name);
+          setRoom(received);
+          setVotedTrackIds(new Set(result.votes || []));
+          setRole(result.role || "guest");
+          if (result.hostToken) saveHostToken(code, result.hostToken);
+        });
+      });
+      connection.on("disconnect", () => setConnectionState("reconnecting"));
+      connection.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
+      connection.on("room:snapshot", (snapshot: Room) => { const received = withReceipt(snapshot); setRoom((previous) => !previous || snapshot.revision >= previous.revision ? received : previous); });
+      connection.on("room:queue", (state: Partial<Room> & { revision: number }) => state && mergeIncremental(state));
+      connection.on("room:playback", (state: Partial<Room> & { revision: number }) => state && mergeIncremental(state));
+      connection.on("room:settings-patch", (state: Partial<Room> & { revision: number }) => state && mergeIncremental(state));
+      connection.on("track:duration-updated", ({ trackId, duration }: { trackId: string; duration: number }) => setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, duration } : track) } : previous));
+      connection.on("room:presence", setPeople);
+      connection.on("queue:votes", (ids: string[]) => setVotedTrackIds(new Set(ids)));
+      connection.on("queue:vote-updated", ({ trackId, votes }: { trackId: string; votes: number }) => setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes } : track) } : previous));
+      connection.on("room:moment", (moment: Moment) => {
+        setRoom((previous) => previous ? { ...previous, moments: [...previous.moments, moment].slice(-60) } : previous);
+        setMomentBursts((previous) => [
+          ...previous.filter((item) => !(item.id.startsWith("pending-") && item.userId === moment.userId && item.trackId === moment.trackId && item.emoji === moment.emoji)),
+          moment,
+        ].slice(-5));
+        window.setTimeout(() => setMomentBursts((previous) => previous.filter((item) => item.id !== moment.id)), 2600);
+      });
+      connection.on("room:chat", (message: ChatMessage) => setRoom((previous) => previous ? { ...previous, messages: [...previous.messages, message].slice(-100) } : previous));
+      connection.on("queue:removed", (removed: { trackId: string; title: string }) => { setRemovedTrack(removed); window.setTimeout(() => setRemovedTrack((current) => current?.trackId === removed.trackId ? null : current), 8000); });
+      connection.on("room:kicked", () => { window.alert("The host removed you from this room."); window.location.href = "/"; });
+      setSocket(connection);
     });
-    connection.on("room:chat", (message: ChatMessage) => setRoom((previous) => previous ? { ...previous, messages: [...previous.messages, message].slice(-100) } : previous));
-    connection.on("queue:removed", (removed: { trackId: string; title: string }) => { setRemovedTrack(removed); window.setTimeout(() => setRemovedTrack((current) => current?.trackId === removed.trackId ? null : current), 8000); });
-    connection.on("room:kicked", () => { window.alert("The host removed you from this room."); window.location.href = "/"; });
-    setSocket(connection);
-    return () => { active = false; connection.disconnect(); };
+    return () => { active = false; window.clearTimeout(wakingTimer); connection?.disconnect(); };
   }, [code]);
 
   useEffect(() => {
@@ -165,26 +194,115 @@ export function RoomPage({ code }: { code: string }) {
     return { vibe, topArtist, topContributor, energy, discovery, togetherness, love, contributors: contributors.size };
   }, [room?.tracks, room?.moments.length, people.length]);
 
-  const setPlayback = useCallback((track: Track | null, isPlaying: boolean, position = 0) => { if (track && canControl) socket?.emit("playback:set", { trackId: track.id, isPlaying, position }); }, [socket, canControl]);
-  const skip = useCallback((direction: -1 | 1, reason: "manual" | "ended" = "manual") => { if (current && (reason === "ended" || canControl)) socket?.emit("playback:advance", { trackId: current.id, direction, reason }); }, [current, socket, canControl]);
+  const requestSync = useCallback(() => {
+    socket?.emit("room:sync", {}, (result: { ok: boolean; snapshot?: Room }) => {
+      if (result?.ok && result.snapshot) setRoom(withReceipt(result.snapshot));
+    });
+  }, [socket]);
+  const setPlayback = useCallback((track: Track | null, isPlaying: boolean, position = 0) => {
+    if (!track || !canControl || !socket || track.pending) return;
+    const now = new Date().toISOString();
+    setRoom((previous) => previous ? withReceipt({
+      ...previous,
+      currentTrackId: track.id,
+      isPlaying,
+      playbackPosition: position,
+      startedAt: isPlaying ? now : null,
+      serverTime: now,
+    }) : previous);
+    const startedAt = performance.now();
+    socket.emit("playback:set", { trackId: track.id, isPlaying, position }, (result: { ok: boolean; error?: string }) => {
+      recordClientTiming("socket:playback:set", performance.now() - startedAt);
+      if (!result?.ok) { requestSync(); setError(result?.error || "Playback changed before that command arrived."); }
+    });
+  }, [socket, canControl, requestSync]);
+  const skip = useCallback((direction: -1 | 1, reason: "manual" | "ended" = "manual") => {
+    if (!current || !socket || (reason !== "ended" && !canControl)) return;
+    if (reason === "manual") {
+      const currentIndex = orderedTracks.findIndex((track) => track.id === current.id);
+      const target = direction === 1 ? orderedTracks[currentIndex + 1] : playedTracks[0];
+      const now = new Date().toISOString();
+      setRoom((previous) => previous ? withReceipt({
+        ...previous,
+        currentTrackId: target?.id || previous.currentTrackId,
+        isPlaying: Boolean(target),
+        playbackPosition: 0,
+        startedAt: target ? now : null,
+        serverTime: now,
+      }) : previous);
+    }
+    const startedAt = performance.now();
+    socket.emit("playback:advance", { trackId: current.id, direction, reason }, (result: { ok: boolean; error?: string }) => {
+      recordClientTiming("socket:playback:advance", performance.now() - startedAt);
+      if (!result?.ok && reason === "manual") { requestSync(); setError(result?.error || "The queue changed before that skip arrived."); }
+    });
+  }, [current, socket, canControl, orderedTracks, playedTracks, requestSync]);
   const vote = useCallback((trackId: string) => {
     if (!socket || votedTrackIds.has(trackId)) return;
     setVotedTrackIds((previous) => new Set(previous).add(trackId));
-    socket.emit("queue:vote", { trackId }, (result: { ok: boolean }) => { if (!result?.ok) setVotedTrackIds((previous) => { const next = new Set(previous); next.delete(trackId); return next; }); });
-  }, [socket, votedTrackIds]);
+    setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes: track.votes + 1 } : track) } : previous);
+    socket.emit("queue:vote", { trackId }, (result: { ok: boolean; alreadyVoted?: boolean }) => {
+      if (!result?.ok) {
+        setVotedTrackIds((previous) => { const next = new Set(previous); next.delete(trackId); return next; });
+        setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.map((track) => track.id === trackId ? { ...track, votes: Math.max(0, track.votes - 1) } : track) } : previous);
+      } else if (result.alreadyVoted) requestSync();
+    });
+  }, [socket, votedTrackIds, requestSync]);
   const react = (emoji: typeof reactionChoices[number], button: HTMLButtonElement) => {
     if (!current || !room || !socket) return;
     button.classList.add("pop"); window.setTimeout(() => button.classList.remove("pop"), 400);
-    socket.emit("room:react", { trackId: current.id, emoji, position: effectivePosition(room) });
+    const optimisticMoment: Moment = { id: `pending-${crypto.randomUUID()}`, roomId: room.id, trackId: current.id, userId: identity.userId, name: identity.name, avatar: identity.avatar, emoji, position: effectivePosition(room), createdAt: new Date().toISOString() };
+    setMomentBursts((previous) => [...previous, optimisticMoment].slice(-5));
+    window.setTimeout(() => setMomentBursts((previous) => previous.filter((item) => item.id !== optimisticMoment.id)), 1_200);
+    socket.emit("room:react", { trackId: current.id, emoji, position: optimisticMoment.position });
   };
-  const addUrl = async (targetUrl: string, targetPlacement: "last" | "next" = placement) => {
+  const addUrl = async (targetUrl: string, targetPlacement: "last" | "next" = placement, metadata?: SearchItem) => {
     if (!targetUrl.trim()) return;
     setAdding(true); setError("");
+    const pendingId = `pending-${crypto.randomUUID()}`;
+    const pendingTrack: Track = {
+      id: pendingId,
+      url: targetUrl,
+      provider: "youtube",
+      providerId: metadata?.providerId || "",
+      title: metadata?.title || "Resolving YouTube video…",
+      artist: metadata?.artist || "Fetching video details",
+      thumbnail: metadata?.thumbnail || null,
+      duration: metadata?.duration || null,
+      addedBy: identity.name,
+      addedByUserId: identity.userId,
+      position: Math.max(-1, ...(room?.tracks.map((track) => track.position) || [-1])) + 1,
+      votes: 0,
+      playedAt: null,
+      removedAt: null,
+      playNext: targetPlacement === "next",
+      pending: true,
+    };
+    setRoom((previous) => previous ? { ...previous, tracks: [...previous.tracks, pendingTrack], queueOrder: [...previous.queueOrder, pendingId] } : previous);
     try {
-      await api(`/api/rooms/${code}/tracks`, { method: "POST", body: JSON.stringify({ url: targetUrl, addedBy: identity.name, userId: identity.userId, hostToken: getHostToken(code), placement: targetPlacement }) });
+      const created = await api<Track>(`/api/rooms/${code}/tracks`, {
+        method: "POST",
+        body: JSON.stringify({
+          url: targetUrl,
+          addedBy: identity.name,
+          userId: identity.userId,
+          hostToken: getHostToken(code),
+          placement: targetPlacement,
+          metadata: metadata ? { providerId: metadata.providerId, title: metadata.title, artist: metadata.artist, thumbnail: metadata.thumbnail, duration: metadata.duration } : undefined,
+        }),
+      });
+      setRoom((previous) => previous ? {
+        ...previous,
+        tracks: previous.tracks.map((track) => track.id === pendingId ? created : track),
+        queueOrder: previous.queueOrder.map((id) => id === pendingId ? created.id : id),
+        currentTrackId: previous.currentTrackId || created.id,
+      } : previous);
       setUrl(""); setPlacement("last"); setSearchOpen(false); setLocalResults([]); setYoutubeResults([]); setNextPageToken(null); setSearchError("");
     }
-    catch (err) { setError(err instanceof Error ? err.message : "Could not add that track."); }
+    catch (err) {
+      setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.filter((track) => track.id !== pendingId), queueOrder: previous.queueOrder.filter((id) => id !== pendingId) } : previous);
+      setError(err instanceof Error ? err.message : "Could not add that track.");
+    }
     finally { setAdding(false); }
   };
   const searchYouTube = async (loadMore = false) => {
@@ -212,11 +330,25 @@ export function RoomPage({ code }: { code: string }) {
   const move = (track: Track, delta: number) => {
     const ids = orderedTracks.filter((item) => item.id !== current?.id).map((item) => item.id); const from = ids.indexOf(track.id); const to = from + delta;
     if (from < 0 || to < 0 || to >= ids.length) return;
-    [ids[from], ids[to]] = [ids[to], ids[from]]; socket?.emit("queue:reorder", { trackIds: ids });
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    setRoom((previous) => previous ? { ...previous, queueOrder: [previous.currentTrackId, ...ids].filter((id): id is string => Boolean(id)) } : previous);
+    socket?.emit("queue:reorder", { trackIds: ids }, (result: { ok: boolean }) => { if (!result?.ok) requestSync(); });
   };
   const copyQueue = async () => { await navigator.clipboard.writeText(orderedTracks.map((track, index) => `${index + 1}. ${room?.partyMode === "blind_pick" && track.id !== room.currentTrackId ? `Mystery pick by ${track.addedBy}` : `${track.title} — ${track.artist}`}`).join("\n") || "Connectify queue is empty"); setQueueMenu(false); };
   const shareDna = async () => { await navigator.clipboard.writeText(`${room?.name || "Our room"} is a ${roomDna.vibe.toLowerCase()} — ${roomDna.contributors} contributors, ${roomDna.topArtist} on repeat, ${roomDna.love}% crowd love. ${window.location.href}`); setCopied(true); window.setTimeout(() => setCopied(false), 1800); };
-  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "discoverable">>) => socket?.emit("room:settings", settings, (result: { ok: boolean; error?: string }) => { if (!result?.ok) setError(result?.error || "Could not update the room."); });
+  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "discoverable">>) => {
+    setRoom((previous) => previous ? { ...previous, ...settings } : previous);
+    socket?.emit("room:settings", settings, (result: { ok: boolean; error?: string }) => { if (!result?.ok) { requestSync(); setError(result?.error || "Could not update the room."); } });
+  };
+  const removeTrack = (track: Track) => {
+    if (!socket || track.pending) return;
+    setRoom((previous) => previous ? {
+      ...previous,
+      tracks: previous.tracks.filter((item) => item.id !== track.id),
+      queueOrder: previous.queueOrder.filter((id) => id !== track.id),
+    } : previous);
+    socket.emit("queue:remove", { trackId: track.id }, (result: { ok: boolean }) => { if (!result?.ok) requestSync(); });
+  };
   const kickMember = (memberId: string, name: string) => { if (window.confirm(`Remove ${name} and prevent them from rejoining?`)) socket?.emit("room:kick", { memberId }); };
   const clearQueue = () => { if (window.confirm("Clear the entire queue and listening history?")) socket?.emit("queue:clear", {}, () => setQueueMenu(false)); };
   const sendChat = (event: React.FormEvent) => {
@@ -239,7 +371,7 @@ export function RoomPage({ code }: { code: string }) {
     if (list) list.scrollTop = list.scrollHeight;
   }, [room?.messages.length, sideTab]);
 
-  if (!room) return <main className="room-loading"><a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a><div className="loading-record" />{error ? <><h2>{error}</h2><a href="/">Go back home</a></> : <p>Tuning in to {code}…</p>}</main>;
+  if (!room) return <main className="room-loading"><a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a><div className="loading-record" />{error ? <><h2>{error}</h2><a href="/">Go back home</a></> : <p>{wakingRoom ? "Waking Connectify…" : `Tuning in to ${code}…`}</p>}</main>;
 
   return <main className={`room-shell theme-${room.theme} ${room.partyMode === "watch_party" ? "watch-party" : ""}`}>
     <header className="room-nav">
@@ -259,7 +391,8 @@ export function RoomPage({ code }: { code: string }) {
         {room.partyMode !== "standard" && <div className="party-mode-banner"><Gamepad2 /><div><strong>{modeName(room.partyMode)}</strong><span>{partyModes.find((mode) => mode.id === room.partyMode)?.description}</span></div>{isHost && <button onClick={() => setPartyOpen(true)}>Change</button>}</div>}
         <div className="now-card">
           <div className="video-stage">
-            {current ? <YouTubePlayer key={current.id} track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} /> : <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
+            <YouTubePlayer track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => current && socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} />
+            {!current && <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
             <div className="stage-vignette" />
             <div className="moment-burst-layer">{momentBursts.filter((moment) => moment.trackId === current?.id).map((moment, index) => <span key={moment.id} style={{ "--burst-x": `${18 + index * 16}%` } as React.CSSProperties}><b>{moment.emoji}</b><small>{moment.name}</small></span>)}</div>
             <button className={`heart-button ${liked ? "liked" : ""}`} onClick={() => setLiked(!liked)} aria-label="Like song"><Heart fill={liked ? "currentColor" : "none"} /></button>
@@ -297,10 +430,10 @@ export function RoomPage({ code }: { code: string }) {
             const queueIndex = orderedTracks.findIndex((item) => item.id === track.id);
             const pendingIndex = orderedTracks.filter((item) => item.id !== current?.id).findIndex((item) => item.id === track.id);
             const pendingCount = orderedTracks.filter((item) => item.id !== current?.id).length;
-            return <article key={track.id} className={`queue-item ${active ? "active" : ""}`}>
-              <button className={`queue-thumb ${blind ? "blind" : ""}`} onClick={() => setPlayback(track, true, 0)} disabled={!canControl || blind} aria-label={blind ? "Hidden Blind Pick" : `Play ${track.title}`}>{blind ? <EyeOff /> : <img src={track.thumbnail || ""} alt="" />}<span>{active && room.isPlaying ? <i className="equalizer"><b /><b /><b /></i> : <Play size={15} fill="currentColor" />}</span></button>
+            return <article key={track.id} className={`queue-item ${active ? "active" : ""} ${track.pending ? "pending" : ""}`}>
+              <button className={`queue-thumb ${blind ? "blind" : ""}`} onClick={() => setPlayback(track, true, 0)} disabled={!canControl || blind || track.pending} aria-label={blind ? "Hidden Blind Pick" : `Play ${track.title}`}>{blind ? <EyeOff /> : track.thumbnail ? <img src={track.thumbnail} alt="" /> : <RotateCw />}<span>{active && room.isPlaying ? <i className="equalizer"><b /><b /><b /></i> : <Play size={15} fill="currentColor" />}</span></button>
               <div className="queue-meta"><strong>{blind ? "Mystery pick" : track.title}</strong><span>{blind ? "Revealed when it starts" : track.artist}</span><small>{active ? "Playing now" : track.playNext ? "Pinned to play next" : `Starts in ~${Math.max(1, Math.round((etaByTrack.get(track.id) || 0) / 60))} min`} · Added by {track.addedBy}</small></div>
-              <div className="queue-actions"><button className={votedTrackIds.has(track.id) ? "voted" : ""} onClick={() => vote(track.id)} disabled={votedTrackIds.has(track.id)} title={votedTrackIds.has(track.id) ? "Already voted" : "Vote up"}><Heart size={14} fill={votedTrackIds.has(track.id) ? "currentColor" : "none"} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={!canControl || active || pendingIndex <= 0} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={!canControl || active || pendingIndex < 0 || pendingIndex === pendingCount - 1} title="Move down"><ArrowDown size={14} /></button><button onClick={() => socket?.emit("queue:remove", { trackId: track.id })} disabled={!canControl || (room.partyMode === "one_take" && active)} title="Remove"><Trash2 size={14} /></button></div>
+              <div className="queue-actions"><button className={votedTrackIds.has(track.id) ? "voted" : ""} onClick={() => vote(track.id)} disabled={votedTrackIds.has(track.id) || track.pending} title={votedTrackIds.has(track.id) ? "Already voted" : "Vote up"}><Heart size={14} fill={votedTrackIds.has(track.id) ? "currentColor" : "none"} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={!canControl || active || pendingIndex <= 0 || track.pending} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={!canControl || active || pendingIndex < 0 || pendingIndex === pendingCount - 1 || track.pending} title="Move down"><ArrowDown size={14} /></button><button onClick={() => removeTrack(track)} disabled={!canControl || track.pending || (room.partyMode === "one_take" && active)} title="Remove"><Trash2 size={14} /></button></div>
             </article>;
           })}
           {!filteredTracks.length && <div className="queue-empty"><ListMusic /><strong>{filter ? "No matches" : "Your queue is empty"}</strong><span>{filter ? "Try another search." : "Paste a link to start the music."}</span></div>}
@@ -322,10 +455,10 @@ export function RoomPage({ code }: { code: string }) {
   </main>;
 }
 
-function SearchResult({ item, canControl, adding, onAdd }: { item: SearchItem; canControl: boolean; adding: boolean; onAdd: (url: string, placement?: "last" | "next") => Promise<void> }) {
+function SearchResult({ item, canControl, adding, onAdd }: { item: SearchItem; canControl: boolean; adding: boolean; onAdd: (url: string, placement?: "last" | "next", metadata?: SearchItem) => Promise<void> }) {
   return <article className="search-result">
     <img src={item.thumbnail || "/connectify.svg"} alt="" loading="lazy" />
     <div><strong>{item.title}</strong><span>{item.artist}</span><small>{item.source === "connectify" ? "Connectify Library" : "YouTube"}</small></div>
-    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last")}><Plus />Add</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next")}><ListPlus />Next</button>}</div>
+    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)}><Plus />Add</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)}><ListPlus />Next</button>}</div>
   </article>;
 }

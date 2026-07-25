@@ -58,8 +58,8 @@ export async function searchYouTube(rawQuery: string, pageToken?: string): Promi
     memoryCache.delete(key); memoryCache.set(key, memory);
     return { ...memory.value, cached: true };
   }
-  const stored = await prisma.searchCache.findFirst({ where: { key, expiresAt: { gt: new Date() } } });
-  if (stored) {
+  const stored = await prisma.searchCache.findUnique({ where: { key } });
+  if (stored && stored.expiresAt > new Date()) {
     const value = stored.response as unknown as YouTubeSearchResponse;
     touchMemory(key, value);
     return { ...value, cached: true };
@@ -87,7 +87,8 @@ export async function searchYouTube(rawQuery: string, pageToken?: string): Promi
       cached: false,
     };
     const expiresAt = new Date(Date.now() + DATABASE_TTL);
-    await prisma.searchCache.upsert({ where: { key }, create: { key, query, pageToken, response: value as unknown as Prisma.InputJsonValue, expiresAt }, update: { response: value as unknown as Prisma.InputJsonValue, expiresAt } });
+    void prisma.searchCache.upsert({ where: { key }, create: { key, query, pageToken, response: value as unknown as Prisma.InputJsonValue, expiresAt }, update: { response: value as unknown as Prisma.InputJsonValue, expiresAt } })
+      .catch((error) => console.warn("Could not persist search cache", error));
     if (Math.random() < 0.02) void prisma.searchCache.deleteMany({ where: { expiresAt: { lt: new Date() } } });
     touchMemory(key, value);
     return value;

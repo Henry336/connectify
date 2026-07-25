@@ -14,6 +14,7 @@ export type Track = {
   playedAt: string | null;
   removedAt: string | null;
   playNext: boolean;
+  pending?: boolean;
 };
 
 export type Moment = {

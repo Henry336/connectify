@@ -23,3 +23,17 @@ export function trackChangeAllowed(partyMode: string, currentTrackId: string | n
 export function advanceAllowed(partyMode: string, reason: "manual" | "ended") {
   return partyMode !== "one_take" || reason === "ended";
 }
+
+export function endedPlaybackAllowed(input: {
+  currentTrackId: string | null;
+  expectedTrackId: string;
+  isPlaying: boolean;
+  duration: number | null | undefined;
+  playbackPosition: number;
+  startedAt: Date | null;
+  now?: number;
+}) {
+  if (input.currentTrackId !== input.expectedTrackId || !input.isPlaying || !input.duration) return false;
+  const elapsed = input.playbackPosition + (input.startedAt ? Math.max(0, ((input.now ?? Date.now()) - input.startedAt.getTime()) / 1000) : 0);
+  return elapsed >= input.duration - 4;
+}

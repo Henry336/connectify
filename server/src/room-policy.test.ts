@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addTrackDenial, advanceAllowed, artistAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
+import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
 
 test("locked rooms allow hosts and returning members but reject strangers", () => {
   assert.equal(joinRoomDenial({ isLocked: true, isReturning: false, isHost: false, isBanned: false }), "This room is locked to returning members.");
@@ -29,4 +29,21 @@ test("One Take blocks manual changes but still advances when playback ends", () 
   assert.equal(trackChangeAllowed("one_take", "current", "current"), true);
   assert.equal(advanceAllowed("one_take", "manual"), false);
   assert.equal(advanceAllowed("one_take", "ended"), true);
+});
+
+test("only a current track near its authoritative end can advance the room", () => {
+  const base = {
+    currentTrackId: "current",
+    expectedTrackId: "current",
+    isPlaying: true,
+    duration: 180,
+    playbackPosition: 20,
+    startedAt: new Date(100_000),
+    now: 256_500,
+  };
+  assert.equal(endedPlaybackAllowed(base), true);
+  assert.equal(endedPlaybackAllowed({ ...base, now: 200_000 }), false);
+  assert.equal(endedPlaybackAllowed({ ...base, expectedTrackId: "stale" }), false);
+  assert.equal(endedPlaybackAllowed({ ...base, isPlaying: false }), false);
+  assert.equal(endedPlaybackAllowed({ ...base, duration: null }), false);
 });
