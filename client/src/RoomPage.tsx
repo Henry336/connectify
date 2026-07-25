@@ -405,7 +405,22 @@ export function RoomPage({ code }: { code: string }) {
     if (list) list.scrollTop = list.scrollHeight;
   }, [room?.messages.length, sideTab]);
 
-  if (!room) return <main className="room-loading"><a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a><div className="loading-record" />{error ? <><h2>{error}</h2><a href="/">Go back home</a></> : <p>{wakingRoom ? "Waking Connectify…" : `Tuning in to ${code}…`}</p>}</main>;
+  if (!room) return <main className="room-loading">
+    <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
+    {error ? <section className="loading-failure"><span><WifiOff /></span><h2>{error}</h2><a href="/">Go back home</a></section> :
+      <section className="connect-loader" role="status" aria-live="polite">
+        <div className="connection-visual" aria-hidden="true">
+          <i className="signal-ring" /><i className="signal-ring" /><i className="signal-ring" />
+          <i className="signal-disc" />
+          <i className="signal-orbit"><b /></i>
+          <i className="signal-orbit orbit-two"><b /></i>
+          <span className="signal-core"><Radio /></span>
+        </div>
+        <div className="loading-equalizer" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
+        <p>{wakingRoom ? "Waking Connectify" : `Tuning in to ${code}`}<span className="loader-dots" aria-hidden="true"><i /><i /><i /></span></p>
+        <small>{wakingRoom ? "Bringing the room and its queue online" : "Syncing the room with everyone"}</small>
+      </section>}
+  </main>;
 
   return <main className={`room-shell theme-${room.theme} ${room.partyMode === "watch_party" ? "watch-party" : ""}`}>
     <header className="room-nav">
