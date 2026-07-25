@@ -139,7 +139,7 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
     prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId: input.userId } } }),
     prisma.track.count({ where: { roomId: room.id, removedAt: null, playedAt: null } }),
     isHost ? Promise.resolve(0) : prisma.track.count({ where: { roomId: room.id, addedByUserId: input.userId, playedAt: null, removedAt: null, ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}) } }),
-    prisma.track.findFirst({ where: { roomId: room.id, providerId: metadata.providerId, removedAt: null }, select: { title: true } }),
+    prisma.track.findFirst({ where: { roomId: room.id, providerId: metadata.providerId, removedAt: null, playedAt: null }, select: { title: true } }),
     room.partyMode === "discovery" ? prisma.track.findMany({ where: { roomId: room.id }, select: { artist: true } }) : Promise.resolve([]),
     prisma.track.aggregate({ where: { roomId: room.id, removedAt: null }, _max: { position: true } }),
     room.currentTrackId ? prisma.track.findFirst({ where: { id: room.currentTrackId, removedAt: null, playedAt: null }, select: { id: true } }) : Promise.resolve(null),
@@ -155,7 +155,7 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
   }
   if (duplicate) {
     await abandonOperation(input.operationId);
-    return res.status(409).json({ error: `“${duplicate.title}” is already in this room.` });
+    return res.status(409).json({ error: `“${duplicate.title}” is already playing or in the queue.` });
   }
   if (!artistAllowed(room.partyMode, artists.map((track) => track.artist), metadata.artist)) {
     await abandonOperation(input.operationId);
