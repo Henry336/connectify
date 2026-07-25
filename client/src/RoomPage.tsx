@@ -47,7 +47,6 @@ export function RoomPage({ code }: { code: string }) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [liked, setLiked] = useState(false);
   const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(() => new Set());
   const [volume, setVolume] = useState(72);
   const [roomMenu, setRoomMenu] = useState(false);
@@ -448,7 +447,6 @@ export function RoomPage({ code }: { code: string }) {
             {!current && <div className="empty-record"><ListMusic /><span>Add the first song</span></div>}
             <div className="stage-vignette" />
             <div className="moment-burst-layer">{momentBursts.filter((moment) => moment.trackId === current?.id).map((moment, index) => <span key={moment.id} style={{ "--burst-x": `${18 + index * 16}%` } as React.CSSProperties}><b>{moment.emoji}</b><small>{moment.name}</small></span>)}</div>
-            <button className={`heart-button ${liked ? "liked" : ""}`} onClick={() => setLiked(!liked)} aria-label="Like song"><Heart fill={liked ? "currentColor" : "none"} /></button>
             {current && <div className="source-badge">YOUTUBE</div>}
           </div>
           <div className="track-info"><div><span className="now-label">NOW PLAYING</span><h2>{current?.title || "The room is quiet"}</h2><p>{current?.artist || "Paste a YouTube link to get started"}</p></div>{current && <div className="track-info-actions">{room.partyMode === "watch_party" && <button className="icon-button" onClick={enterFullscreen} aria-label="Enter full-screen theater"><Maximize2 /></button>}<a href={current.url} target="_blank" rel="noreferrer" className="icon-button" aria-label="Open source"><Link2 /></a></div>}</div>
