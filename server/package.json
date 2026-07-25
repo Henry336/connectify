@@ -9,6 +9,7 @@
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "test": "tsx --test src/**/*.test.ts",
+    "test:load": "node scripts/load-test.mjs",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy"

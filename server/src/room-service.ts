@@ -1,6 +1,20 @@
 import { PrismaClient } from "@prisma/client";
 
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
+
+prisma.$on("query", (event) => {
+  if (process.env.NODE_ENV !== "production" && process.env.DB_TIMINGS !== "all") return;
+  if (event.duration < 50 && process.env.DB_TIMINGS !== "all") return;
+  const operation = event.query.trim().split(/\s+/, 1)[0]?.toUpperCase() || "QUERY";
+  console.log(JSON.stringify({
+    type: "db_timing",
+    operation,
+    target: event.target,
+    durationMs: event.duration,
+  }));
+});
 
 export type FairTrack = {
   id: string;
@@ -121,6 +135,21 @@ export async function roomHistoryPage(code: string, before?: Date, limit = 30) {
     tracks: tracks.slice(0, limit),
     hasMore: tracks.length > limit,
     cursor: tracks.length > limit ? tracks[limit - 1]?.playedAt?.toISOString() ?? null : null,
+  };
+}
+
+export async function roomActivityPage(code: string, before?: Date, limit = 30) {
+  const room = await prisma.room.findUnique({ where: { code: code.toUpperCase() }, select: { id: true } });
+  if (!room) return null;
+  const events = await prisma.roomActivity.findMany({
+    where: { roomId: room.id, ...(before ? { createdAt: { lt: before } } : {}) },
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+  });
+  return {
+    events: events.slice(0, limit),
+    hasMore: events.length > limit,
+    cursor: events.length > limit ? events[limit - 1]?.createdAt.toISOString() ?? null : null,
   };
 }
 

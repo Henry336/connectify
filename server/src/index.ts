@@ -5,7 +5,7 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, trackChangeAllowed } from "./room-policy.js";
 import { searchConnectifyLibrary, searchYouTube } from "./search-service.js";
 import { resolveTrack } from "./youtube.js";
@@ -20,7 +20,12 @@ const operationIdSchema = z.string().uuid();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: allowedOrigins, credentials: true } });
+const io = new Server(server, {
+  cors: { origin: allowedOrigins, credentials: true },
+  httpCompression: { threshold: 4_096 },
+  perMessageDeflate: { threshold: 4_096 },
+  maxHttpBufferSize: 256_000,
+});
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({ origin: allowedOrigins, credentials: true, exposedHeaders: ["Server-Timing", "X-Request-Id"] }));
@@ -67,6 +72,41 @@ app.get("/ready", asyncRoute(async (_req, res) => {
     region: process.env.RENDER_REGION || process.env.RENDER_SERVICE_NAME,
   });
 }));
+
+type VitalSample = { name: string; value: number; rating: string; path: string; at: number };
+const vitalSamples: VitalSample[] = [];
+app.post("/api/metrics/vitals", asyncRoute(async (req, res) => {
+  const sample = z.object({
+    name: z.enum(["CLS", "FCP", "INP", "LCP", "TTFB"]),
+    value: z.number().finite().min(0).max(600_000),
+    rating: z.enum(["good", "needs-improvement", "poor"]),
+    path: z.string().max(120),
+  }).parse(req.body);
+  vitalSamples.push({ ...sample, path: sample.path.replace(/\/room\/[^/]+/i, "/room/:code"), at: Date.now() });
+  if (vitalSamples.length > 1_000) vitalSamples.splice(0, vitalSamples.length - 1_000);
+  res.status(202).json({ ok: true });
+}));
+
+app.get("/api/metrics/dashboard", (req, res) => {
+  const expected = process.env.METRICS_ADMIN_TOKEN;
+  if (!expected || req.get("authorization") !== `Bearer ${expected}`) return res.status(404).json({ error: "Not found." });
+  const cutoff = Date.now() - 24 * 60 * 60 * 1_000;
+  const recent = vitalSamples.filter((sample) => sample.at >= cutoff);
+  const groups = new Map<string, VitalSample[]>();
+  for (const sample of recent) groups.set(sample.name, [...(groups.get(sample.name) || []), sample]);
+  const metrics = [...groups.entries()].map(([name, samples]) => {
+    const values = samples.map((sample) => sample.value).sort((a, b) => a - b);
+    return {
+      name,
+      samples: values.length,
+      p50: values[Math.floor(values.length * 0.5)] || 0,
+      p75: values[Math.floor(values.length * 0.75)] || 0,
+      p95: values[Math.floor(values.length * 0.95)] || 0,
+      goodPercent: Math.round(samples.filter((sample) => sample.rating === "good").length / samples.length * 100),
+    };
+  });
+  res.json({ windowHours: 24, metrics });
+});
 
 app.post("/api/rooms", asyncRoute(async (req, res) => {
   const input = z.object({ name: z.string().trim().min(1).max(48), userId: z.string().min(8).max(80) }).parse(req.body);
@@ -186,9 +226,52 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
 
 type PresencePerson = { id: string; userId: string; name: string; avatar: string; role: "host" | "guest" };
 const presence = new Map<string, Map<string, PresencePerson>>();
-const emitPresence = (code: string) => io.to(code).emit("room:presence", [...(presence.get(code)?.values() ?? [])]);
+const joinReservations = new Map<string, Set<string>>();
+const uniquePresence = (code: string) => {
+  const people = new Map<string, PresencePerson>();
+  for (const person of presence.get(code)?.values() ?? []) {
+    const previous = people.get(person.userId);
+    if (!previous || person.role === "host") people.set(person.userId, person);
+  }
+  return [...people.values()];
+};
+const emitPresence = (code: string) => io.to(code).emit("room:presence", uniquePresence(code));
 const emitSnapshot = async (code: string) => io.to(code).emit("room:snapshot", await roomSnapshot(code));
 const emitQueueState = async (code: string) => io.to(code).emit("room:queue", await roomQueueState(code));
+const recordActivity = async (
+  code: string,
+  socket: Socket,
+  action: string,
+  target?: string,
+  detail?: Record<string, unknown>,
+) => {
+  const roomId = socket.data.roomId as string | undefined;
+  const actorId = socket.data.userId as string | undefined;
+  if (!roomId || !actorId) return;
+  try {
+    const event = await prisma.roomActivity.create({
+      data: {
+        roomId,
+        actorId,
+        actorName: String(socket.data.name || "Someone"),
+        action,
+        target,
+        detail: detail as any,
+      },
+    });
+    io.to(code).emit("room:activity", event);
+    io.to(code).emit("room:event", {
+      id: event.id,
+      actorId: event.actorId,
+      actorName: event.actorName,
+      action: event.action,
+      target: event.target,
+      createdAt: event.createdAt,
+    });
+  } catch (error) {
+    console.error("Room activity write failed:", error);
+  }
+};
 const safe = (
   nameOrHandler: string | ((...args: any[]) => Promise<void>),
   maybeHandler?: (...args: any[]) => Promise<void>,
@@ -302,7 +385,16 @@ io.on("connection", (socket) => {
     reply(page ? { ok: true, ...page } : { ok: false });
   }));
 
+  socket.on("room:activity-page", safe("room:activity-page", async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const parsed = z.object({ before: z.string().datetime().optional() }).safeParse(payload || {});
+    if (!code || !isHostSocket(socket) || !parsed.success) return reply({ ok: false });
+    const page = await roomActivityPage(code, parsed.data.before ? new Date(parsed.data.before) : undefined);
+    reply(page ? { ok: true, ...page } : { ok: false });
+  }));
+
   socket.on("room:join", safe("room:join", async (payload, reply = () => undefined) => {
+    let releaseReservation: (() => void) | undefined;
     try {
       const input = z.object({ code: z.string().length(6), userId: z.string().min(8).max(80), name: z.string().trim().min(1).max(30), avatar: z.string().max(4), hostToken: z.string().max(200).optional() }).parse(payload);
       const code = input.code.toUpperCase();
@@ -324,6 +416,22 @@ io.on("connection", (socket) => {
       }
       const denial = joinRoomDenial({ isLocked: room.isLocked, isReturning: Boolean(existing), isHost, isBanned: Boolean(existing?.isBanned) });
       if (denial) return reply({ ok: false, error: denial });
+      const presentIds = new Set(uniquePresence(code).map((person) => person.userId));
+      const reservations = joinReservations.get(code) || new Set<string>();
+      joinReservations.set(code, reservations);
+      const alreadyPresent = presentIds.has(input.userId) || reservations.has(input.userId);
+      const occupied = new Set([...presentIds, ...reservations]).size;
+      const effectiveCapacity = isHost ? 100 : Math.min(100, room.maxParticipants);
+      if (!alreadyPresent && occupied >= effectiveCapacity) {
+        return reply({ ok: false, error: `This room has reached its ${effectiveCapacity}-listener capacity.` });
+      }
+      if (!alreadyPresent) {
+        reservations.add(input.userId);
+        releaseReservation = () => {
+          reservations.delete(input.userId);
+          if (!reservations.size) joinReservations.delete(code);
+        };
+      }
       const role = isHost ? "host" : "guest";
       await prisma.roomMember.upsert({
         where: { roomId_userId: { roomId: room.id, userId: input.userId } },
@@ -336,12 +444,15 @@ io.on("connection", (socket) => {
         roomId: room.id,
         userId: input.userId,
         name: input.name,
+        avatar: input.avatar,
         isHost,
         guestsCanControl: room.guestsCanControl,
         guestsCanAdd: room.guestsCanAdd,
       };
       if (!presence.has(code)) presence.set(code, new Map());
       presence.get(code)!.set(socket.id, { id: socket.id, userId: input.userId, name: input.name, avatar: input.avatar, role });
+      releaseReservation?.();
+      releaseReservation = undefined;
       if (issuedHostToken && room.createdBy !== input.userId) {
         for (const target of await io.in(code).fetchSockets()) {
           const targetIsHost = target.data.userId === input.userId;
@@ -361,6 +472,8 @@ io.on("connection", (socket) => {
       void scheduleRoomEnd(code);
     } catch (error: any) {
       reply({ ok: false, error: error?.message || "Could not join room." });
+    } finally {
+      releaseReservation?.();
     }
   }));
 
@@ -423,6 +536,7 @@ io.on("connection", (socket) => {
     await completeOperation(parsed.data.operationId, result);
     reply(result);
     void scheduleRoomEnd(code);
+    if (parsed.data.reason === "manual") void recordActivity(code, socket, "skipped_track");
     console.log(JSON.stringify({ type: "socket_timing", event: "playback:advance", durationMs: Number((performance.now() - startedAt).toFixed(1)) }));
   }));
 
@@ -493,6 +607,61 @@ io.on("connection", (socket) => {
     reply({ ok: true, state });
   }));
 
+  socket.on("queue:bulk", safe("queue:bulk", async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const roomId = socket.data.roomId as string | undefined;
+    const userId = socket.data.userId as string | undefined;
+    const parsed = z.object({
+      trackIds: z.array(z.string()).min(1).max(100).refine((ids) => new Set(ids).size === ids.length),
+      action: z.enum(["remove", "top", "bottom"]),
+      operationId: operationIdSchema.default(() => randomUUID()),
+    }).safeParse(payload);
+    if (!code || !roomId || !userId || !isHostSocket(socket) || !parsed.success) {
+      return reply({ ok: false, error: "Host access required." });
+    }
+    const operation = await claimOperation(roomId, userId, `queue:bulk:${parsed.data.action}`, parsed.data.operationId);
+    if (!operation.fresh) return reply(operation.result || { ok: false, error: "That bulk action is still being confirmed." });
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      include: { tracks: { where: { removedAt: null, playedAt: null }, orderBy: { position: "asc" } } },
+    });
+    if (!room) {
+      await abandonOperation(parsed.data.operationId);
+      return reply({ ok: false });
+    }
+    const selected = room.tracks.filter((track) => parsed.data.trackIds.includes(track.id) && track.id !== room.currentTrackId);
+    if (!selected.length) {
+      await abandonOperation(parsed.data.operationId);
+      return reply({ ok: false, error: "Select at least one upcoming item." });
+    }
+    const selectedIds = selected.map((track) => track.id);
+    if (parsed.data.action === "remove") {
+      await prisma.$transaction([
+        prisma.track.updateMany({
+          where: { roomId, id: { in: selectedIds } },
+          data: { removedAt: new Date(), removedBy: userId, playNext: false },
+        }),
+        prisma.room.update({ where: { id: roomId }, data: { revision: { increment: 1 } } }),
+      ]);
+      const remainingIds = room.tracks.filter((track) => !selectedIds.includes(track.id)).map((track) => track.id);
+      await normalizePositions(roomId, remainingIds);
+    } else {
+      const untouched = room.tracks.filter((track) => !selectedIds.includes(track.id) && track.id !== room.currentTrackId);
+      const currentIds = room.currentTrackId ? [room.currentTrackId] : [];
+      const nextOrder = parsed.data.action === "top"
+        ? [...currentIds, ...selectedIds, ...untouched.map((track) => track.id)]
+        : [...currentIds, ...untouched.map((track) => track.id), ...selectedIds];
+      await normalizePositions(roomId, nextOrder);
+      await prisma.room.update({ where: { id: roomId }, data: { revision: { increment: 1 } } });
+    }
+    const state = await roomQueueState(code);
+    const result = { ok: true, state };
+    await completeOperation(parsed.data.operationId, result);
+    reply(result);
+    io.to(code).emit("room:queue", state);
+    void recordActivity(code, socket, `bulk_${parsed.data.action}`, `${selectedIds.length} queue items`);
+  }));
+
   socket.on("queue:vote", safe("queue:vote", async (payload, reply = () => undefined) => {
     const code = socket.data.code as string | undefined;
     const roomId = socket.data.roomId as string | undefined;
@@ -533,12 +702,44 @@ io.on("connection", (socket) => {
     }
   }));
 
+  socket.on("room:profile", safe("room:profile", async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const roomId = socket.data.roomId as string | undefined;
+    const userId = socket.data.userId as string | undefined;
+    const parsed = z.object({
+      name: z.string().trim().min(1).max(30),
+      avatar: z.string().min(1).max(8),
+    }).safeParse(payload);
+    if (!code || !roomId || !userId || !parsed.success) return reply({ ok: false, error: "Choose a valid name and avatar." });
+    await prisma.roomMember.update({
+      where: { roomId_userId: { roomId, userId } },
+      data: { ...parsed.data, lastSeenAt: new Date() },
+    });
+    socket.data.name = parsed.data.name;
+    socket.data.avatar = parsed.data.avatar;
+    for (const targetSocket of await io.in(code).fetchSockets()) {
+      if (targetSocket.data.userId === userId) {
+        targetSocket.data.name = parsed.data.name;
+        targetSocket.data.avatar = parsed.data.avatar;
+      }
+    }
+    for (const target of presence.get(code)?.values() ?? []) {
+      if (target.userId === userId) Object.assign(target, parsed.data);
+    }
+    emitPresence(code);
+    reply({ ok: true });
+  }));
+
   socket.on("room:settings", safe("room:settings", async (payload, reply = () => undefined) => {
     const code = socket.data.code as string | undefined;
     if (!code || !isHostSocket(socket)) return reply({ ok: false, error: "Host access required." });
     const parsed = z.object({
       autopilotEnabled: z.boolean().optional(), partyMode: partyModeSchema.optional(), theme: themeSchema.optional(),
-      isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(), maxSongsPerUser: z.number().int().min(1).max(20).optional(), discoverable: z.boolean().optional(),
+      isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(),
+      maxSongsPerUser: z.number().int().min(1).max(20).optional(),
+      maxParticipants: z.number().int().min(2).max(100).optional(),
+      chatSlowMode: z.union([z.literal(0), z.literal(2), z.literal(5), z.literal(10), z.literal(30)]).optional(),
+      discoverable: z.boolean().optional(),
     }).refine((value) => Object.keys(value).length > 0).safeParse(payload);
     if (!parsed.success) return reply({ ok: false, error: "Invalid room setting." });
     await prisma.room.update({ where: { code }, data: { ...parsed.data, revision: { increment: 1 } } });
@@ -549,8 +750,11 @@ io.on("connection", (socket) => {
       }
     }
     reply({ ok: true });
-    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, discoverable: true } });
+    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, maxParticipants: true, chatSlowMode: true, discoverable: true } });
     io.to(code).emit("room:settings-patch", state);
+    if (parsed.data.partyMode) void recordActivity(code, socket, "changed_mode", parsed.data.partyMode);
+    else if (parsed.data.maxParticipants) void recordActivity(code, socket, "changed_capacity", String(parsed.data.maxParticipants));
+    else if (parsed.data.chatSlowMode !== undefined) void recordActivity(code, socket, "changed_slow_mode", String(parsed.data.chatSlowMode));
   }));
 
   socket.on("room:recover-host", safe("room:recover-host", async (payload, reply = () => undefined) => {
@@ -592,7 +796,7 @@ io.on("connection", (socket) => {
     if (!roomSockets.some((target) => target.data.userId === parsed.data.targetUserId)) {
       return reply({ ok: false, error: "Choose someone who is currently in the room." });
     }
-    const targetMember = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId, userId: parsed.data.targetUserId } }, select: { id: true } });
+    const targetMember = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId, userId: parsed.data.targetUserId } }, select: { id: true, name: true } });
     if (!targetMember) return reply({ ok: false, error: "That member is no longer available." });
     const nextRecoveryKey = newHostToken();
     await prisma.$transaction([
@@ -611,6 +815,7 @@ io.on("connection", (socket) => {
     emitPresence(code);
     io.to(code).emit("room:host-changed", { userId: parsed.data.targetUserId });
     reply({ ok: true });
+    void recordActivity(code, socket, "handed_off_host", targetMember.name);
   }));
 
   socket.on("room:kick", safe(async (payload, reply = () => undefined) => {
@@ -620,6 +825,7 @@ io.on("connection", (socket) => {
     const member = await prisma.roomMember.findFirst({ where: { id: parsed.data.memberId, room: { code }, role: { not: "host" } } });
     if (!member) return reply({ ok: false });
     await prisma.roomMember.update({ where: { id: member.id }, data: { isBanned: true } });
+    void recordActivity(code, socket, "removed_member", member.name);
     for (const target of await io.in(code).fetchSockets()) {
       if (target.data.userId === member.userId) { target.emit("room:kicked"); target.disconnect(true); }
     }
@@ -637,6 +843,7 @@ io.on("connection", (socket) => {
     reply({ ok: true, state });
     io.to(code).emit("room:queue", state);
     void scheduleRoomEnd(code);
+    void recordActivity(code, socket, "cleared_queue");
   }));
 
   socket.on("room:react", safe("room:react", async (payload, reply = () => undefined) => {
@@ -667,13 +874,15 @@ io.on("connection", (socket) => {
     }).safeParse(payload);
     if (!code || !userId || !parsed.success) return reply({ ok: false });
     const person = presence.get(code)?.get(socket.id);
-    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, currentTrackId: true } });
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, currentTrackId: true, chatSlowMode: true } });
     if (!room || !person) return reply({ ok: false });
     const operation = await claimOperation(room.id, userId, "room:chat", parsed.data.operationId);
     if (!operation.fresh) return reply(operation.result || { ok: false, error: "That message is still being confirmed." });
-    if (Date.now() - Number(socket.data.lastChatAt || 0) < 700) {
+    const slowModeMs = isHostSocket(socket) ? 700 : Math.max(700, room.chatSlowMode * 1_000);
+    if (Date.now() - Number(socket.data.lastChatAt || 0) < slowModeMs) {
       await abandonOperation(parsed.data.operationId);
-      return reply({ ok: false, error: "Slow down a little." });
+      const remaining = Math.ceil((slowModeMs - (Date.now() - Number(socket.data.lastChatAt || 0))) / 1_000);
+      return reply({ ok: false, error: `Slow mode: wait ${remaining}s before sending again.` });
     }
     const replyTo = parsed.data.replyToId
       ? await prisma.chatMessage.findFirst({ where: { id: parsed.data.replyToId, roomId: room.id }, select: { id: true } })

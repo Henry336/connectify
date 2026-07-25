@@ -27,6 +27,10 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Accountless recovery keys and secure host handoff with automatic key rotation
 - Mobile autoplay recovery guidance and Media Session lock-screen controls where supported
 - Live listener presence
+- Host-configurable 2–100 listener capacity, a fixed 100-item active queue ceiling, and configurable chat slow mode
+- Editable accountless profiles, remembered device volume, local-time queue ETAs, and a dismissible first-room guide
+- Touch queue dragging, host multi-select tools, rendering containment, and moderation activity history
+- Core Web Vitals collection, privacy-safe database timings, selective snapshot compression, and 10/50/100-listener load tooling
 - Responsive room and mobile player interface
 
 This MVP deliberately supports YouTube first. Spotify playback is not interchangeable with an ordinary embed: synchronized full-track playback requires Spotify authorization for every listener and Spotify Premium eligibility. The provider boundary can be extended when that product decision is made.
@@ -58,6 +62,8 @@ The checked-in `render.yaml` configures a Singapore Web Service. If configuring 
 - `NODE_VERSION=22`
 - `NODE_ENV=production`
 - `YOUTUBE_API_KEY` to a Google Cloud API key with YouTube Data API v3 enabled (optional, but required for live YouTube search)
+- `METRICS_ADMIN_TOKEN` to a long random value if you want the protected Web Vitals summary (optional)
+- `DB_TIMINGS=all` only during a short measurement window if you need every query timing; production otherwise logs only queries taking at least 50 ms
 
 Keep the Neon project in AWS Singapore when possible. Existing Render services should also be checked in the Dashboard because changing `render.yaml` does not relocate an already-created service. Prisma migrations run during deployment rather than every server wake-up.
 
@@ -110,6 +116,22 @@ The PWA share target appears after installing Connectify from a compatible brows
 The server owns room state. Clients apply actions optimistically, send intentions, and converge on revisioned incremental server patches. Full snapshots are reserved for joining and explicit recovery. On reconnect, the stored timestamp and position allow the player to catch up.
 
 For a symptom-by-symptom explanation of the original delays, their root causes, the optimized request and playback paths, instrumentation, trade-offs, and the production test runbook, read [Performance and Reliability Architecture](docs/PERFORMANCE_AND_RELIABILITY.md).
+
+### Scale and performance tooling
+
+Socket.IO compresses payloads only above 4 KB, avoiding needless CPU work on small incremental events. Chat, history, and member data use paginated server reads; long room lists use browser rendering containment so off-screen rows skip normal paint and layout work.
+
+Run the staged concurrency harness against a local or disposable backend:
+
+```bash
+npm run test:load
+```
+
+Set `LOAD_TEST_API_URL=https://your-disposable-backend.example` for a remote environment and optionally `LOAD_TEST_SIZES=10,50,100`. The harness creates temporary rooms, prints join-latency percentiles, and disconnects every simulated listener. Do not point it at a busy production room.
+
+With `METRICS_ADMIN_TOKEN` configured, `GET /api/metrics/dashboard` returns a protected 24-hour Core Web Vitals summary when called with `Authorization: Bearer <token>`. It includes p50/p75/p95 and good-rating percentages. Room paths are normalized to `/room/:code`; no identity, room name, chat text, URL, or database parameter is logged.
+
+Redis remains intentionally absent while Render runs one backend instance. Add the Socket.IO Redis adapter only when two or more backend instances need to share broadcasts.
 
 ## Production follow-ups
 

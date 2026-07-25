@@ -24,6 +24,8 @@ model Room {
   guestsCanControl Boolean  @default(true)
   guestsCanAdd     Boolean  @default(true)
   maxSongsPerUser  Int      @default(5)
+  maxParticipants  Int      @default(50)
+  chatSlowMode     Int      @default(0)
   discoverable     Boolean  @default(false)
   revision         Int      @default(0)
   createdAt        DateTime @default(now())
@@ -33,6 +35,7 @@ model Room {
   members          RoomMember[]
   messages         ChatMessage[]
   operations       RoomOperation[]
+  activities       RoomActivity[]
 }
 
 model Track {
@@ -140,6 +143,20 @@ model RoomOperation {
 
   @@index([roomId, createdAt])
   @@index([createdAt])
+}
+
+model RoomActivity {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  actorId   String
+  actorName String
+  action    String
+  target    String?
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([roomId, createdAt])
 }
 
 model SearchCache {

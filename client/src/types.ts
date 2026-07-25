@@ -57,6 +57,17 @@ export type RoomMember = {
   lastSeenAt: string;
 };
 
+export type RoomActivity = {
+  id: string;
+  roomId: string;
+  actorId: string;
+  actorName: string;
+  action: string;
+  target: string | null;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+};
+
 export type Room = {
   id: string;
   code: string;
@@ -72,6 +83,8 @@ export type Room = {
   guestsCanControl: boolean;
   guestsCanAdd: boolean;
   maxSongsPerUser: number;
+  maxParticipants: number;
+  chatSlowMode: 0 | 2 | 5 | 10 | 30;
   discoverable: boolean;
   revision: number;
   createdAt: string;
