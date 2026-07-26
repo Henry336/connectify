@@ -4,6 +4,7 @@ import App from "./App";
 import { warmBackend } from "./api";
 import { reportCoreWebVitals } from "./performance";
 import "./styles.css";
+import "./redesign.css";
 
 const root = document.getElementById("root")!;
 const application = <StrictMode><App /></StrictMode>;

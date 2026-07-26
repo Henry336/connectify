@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "project": "Connectify",
+  "northStar": "The Violet Listening Lounge",
+  "tone": ["warm", "intimate", "late-night", "editorial", "social"],
+  "palette": {
+    "canvas": "#0f0a12",
+    "canvasRaised": "#151018",
+    "surface": "#1c1420",
+    "surfaceRaised": "#281b2d",
+    "plum": "#502d55",
+    "mauve": "#935073",
+    "peach": "#f6dbc0",
+    "ivory": "#f8f4e9",
+    "signal": "#e9c45a"
+  },
+  "constraints": {
+    "minimumBodyPx": 14,
+    "minimumMetadataPx": 11,
+    "minimumDesktopTargetPx": 40,
+    "minimumTouchTargetPx": 44,
+    "maximumRoomCapacity": 100
+  },
+  "antiReferences": [
+    "generic neon-purple SaaS dashboard",
+    "decorative traffic-light status dots",
+    "tiny operational typography",
+    "undersized media surrounded by empty space",
+    "hover-only controls"
+  ]
+}

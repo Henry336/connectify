@@ -109,12 +109,16 @@ app.get("/api/metrics/dashboard", (req, res) => {
 });
 
 app.post("/api/rooms", asyncRoute(async (req, res) => {
-  const input = z.object({ name: z.string().trim().min(1).max(48), userId: z.string().min(8).max(80) }).parse(req.body);
+  const input = z.object({
+    name: z.string().trim().min(1).max(48),
+    userId: z.string().min(8).max(80),
+    maxParticipants: z.number().int().min(2).max(100).default(50),
+  }).parse(req.body);
   const hostToken = newHostToken();
   let room = null;
   for (let attempt = 0; attempt < 5 && !room; attempt += 1) {
     try {
-      room = await prisma.room.create({ data: { code: createRoomCode(), name: input.name, createdBy: input.userId, hostTokenHash: hashToken(hostToken) } });
+      room = await prisma.room.create({ data: { code: createRoomCode(), name: input.name, createdBy: input.userId, hostTokenHash: hashToken(hostToken), maxParticipants: input.maxParticipants } });
     } catch (error: any) {
       if (error?.code !== "P2002") throw error;
     }
@@ -826,12 +830,53 @@ io.on("connection", (socket) => {
     const member = await prisma.roomMember.findFirst({ where: { id: parsed.data.memberId, room: { code }, role: { not: "host" } } });
     if (!member) return reply({ ok: false });
     await prisma.roomMember.update({ where: { id: member.id }, data: { isBanned: true } });
-    void recordActivity(code, socket, "removed_member", member.name);
+    void recordActivity(code, socket, "blocked_member", member.name);
     for (const target of await io.in(code).fetchSockets()) {
       if (target.data.userId === member.userId) { target.emit("room:kicked"); target.disconnect(true); }
     }
     reply({ ok: true });
     await emitSnapshot(code);
+  }));
+
+  socket.on("room:remove", safe(async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const parsed = z.object({ memberId: z.string() }).safeParse(payload);
+    if (!code || !isHostSocket(socket) || !parsed.success) return reply({ ok: false, error: "Host access required." });
+    const member = await prisma.roomMember.findFirst({ where: { id: parsed.data.memberId, room: { code }, role: { not: "host" }, isBanned: false } });
+    if (!member) return reply({ ok: false, error: "That listener is no longer available." });
+    let removed = false;
+    for (const target of await io.in(code).fetchSockets()) {
+      if (target.data.userId === member.userId) {
+        removed = true;
+        target.emit("room:removed");
+        target.disconnect(true);
+      }
+    }
+    void recordActivity(code, socket, "removed_member", member.name);
+    reply({ ok: true, wasOnline: removed });
+  }));
+
+  socket.on("room:blocked-members", safe(async (_payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    if (!code || !isHostSocket(socket)) return reply({ ok: false, error: "Host access required." });
+    const members = await prisma.roomMember.findMany({
+      where: { room: { code }, isBanned: true },
+      orderBy: { lastSeenAt: "desc" },
+      take: 100,
+      select: { id: true, userId: true, name: true, avatar: true, role: true, joinedAt: true, lastSeenAt: true },
+    });
+    reply({ ok: true, members });
+  }));
+
+  socket.on("room:unblock", safe(async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const parsed = z.object({ memberId: z.string() }).safeParse(payload);
+    if (!code || !isHostSocket(socket) || !parsed.success) return reply({ ok: false, error: "Host access required." });
+    const member = await prisma.roomMember.findFirst({ where: { id: parsed.data.memberId, room: { code }, isBanned: true } });
+    if (!member) return reply({ ok: false, error: "That blocked listener no longer exists." });
+    await prisma.roomMember.update({ where: { id: member.id }, data: { isBanned: false } });
+    void recordActivity(code, socket, "unblocked_member", member.name);
+    reply({ ok: true });
   }));
 
   socket.on("queue:clear", safe(async (_payload, reply = () => undefined) => {

@@ -9,3 +9,5 @@ dist/
 .idea/
 .vscode/
 server/prisma/dev.db*
+.impeccable/config.local.json
+.impeccable/hook.cache.json

@@ -44,11 +44,26 @@ export type RecentRoom = { code: string; name: string; lastVisited: number };
 
 export function getRecentRooms(): RecentRoom[] {
   if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem("connectify.recentRooms") || "[]"); }
+  try {
+    const parsed = JSON.parse(localStorage.getItem("connectify.recentRooms") || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((room): room is RecentRoom => Boolean(
+        room
+        && typeof room.code === "string"
+        && /^[A-Z0-9]{6}$/i.test(room.code)
+        && typeof room.name === "string"
+        && typeof room.lastVisited === "number",
+      ))
+      .sort((a, b) => b.lastVisited - a.lastVisited);
+  }
   catch { return []; }
 }
 
 export function rememberRoom(code: string, name: string) {
   const rooms = getRecentRooms().filter((room) => room.code !== code.toUpperCase());
-  localStorage.setItem("connectify.recentRooms", JSON.stringify([{ code: code.toUpperCase(), name, lastVisited: Date.now() }, ...rooms].slice(0, 5)));
+  localStorage.setItem("connectify.recentRooms", JSON.stringify([
+    { code: code.toUpperCase(), name, lastVisited: Date.now() },
+    ...rooms,
+  ]));
 }

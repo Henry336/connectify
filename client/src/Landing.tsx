@@ -8,6 +8,7 @@ export function Landing() {
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [name, setName] = useState(DEFAULT_IDENTITY.name);
   const [roomName, setRoomName] = useState("Friday night mix");
+  const [maxParticipants, setMaxParticipants] = useState(50);
   const [code, setCode] = useState("");
   const [mode, setMode] = useState<"create" | "join">("create");
   const [busy, setBusy] = useState(false);
@@ -33,7 +34,10 @@ export function Landing() {
       window.clearTimeout(wakingTimer);
       setWaking(false);
       if (mode === "create") {
-        const room = await api<{ code: string; hostToken: string }>("/api/rooms", { method: "POST", body: JSON.stringify({ name: roomName, userId: nextIdentity.userId }) });
+        const room = await api<{ code: string; hostToken: string }>("/api/rooms", {
+          method: "POST",
+          body: JSON.stringify({ name: roomName, userId: nextIdentity.userId, maxParticipants }),
+        });
         saveHostToken(room.code, room.hostToken);
         window.location.href = `/room/${room.code}`;
       } else {
@@ -83,10 +87,18 @@ export function Landing() {
       <form className="room-card" onSubmit={enter}>
         <div className="mode-switch"><button type="button" className={mode === "create" ? "active" : ""} onClick={() => setMode("create")}>Create a room</button><button type="button" className={mode === "join" ? "active" : ""} onClick={() => setMode("join")}>Join with code</button></div>
         <label>Your display name<input value={name} onChange={(e) => setName(e.target.value)} maxLength={30} /></label>
-        {mode === "create" ? <label>Room name<input value={roomName} onChange={(e) => setRoomName(e.target.value)} maxLength={48} placeholder="Late night listening" /></label> : <label>Room code<input className="code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/[^a-z0-9]/gi, "").slice(0, 6))} minLength={6} maxLength={6} placeholder="ABC123" /></label>}
+        {mode === "create" ? <>
+          <label>Room name<input value={roomName} onChange={(e) => setRoomName(e.target.value)} maxLength={48} placeholder="Late night listening" /></label>
+          <label>Room capacity
+            <select value={maxParticipants} onChange={(event) => setMaxParticipants(Number(event.target.value))}>
+              {[10, 20, 30, 50, 75, 100].map((value) => <option key={value} value={value}>{value} listeners</option>)}
+            </select>
+            <small className="field-help">You can change this later in Host Controls. Connectify supports up to 100 listeners per room.</small>
+          </label>
+        </> : <label>Room code<input className="code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/[^a-z0-9]/gi, "").slice(0, 6))} minLength={6} maxLength={6} placeholder="ABC123" /></label>}
         {error && <p className="form-error">{error}</p>}
         <button className="primary wide" disabled={busy}>{waking ? "Waking Connectify…" : busy ? "Tuning in…" : mode === "create" ? "Create listening room" : "Join the room"}<ArrowRight size={18} /></button>
-        {recentRooms.length > 0 && <div className="recent-rooms"><span>Return to a room</span>{recentRooms.slice(0, 3).map((room) => <a key={room.code} href={`/room/${room.code}`}><i><Radio /></i><strong>{room.name}</strong><small>{room.code}</small><ArrowRight /></a>)}</div>}
+        {recentRooms.length > 0 && <div className="recent-rooms"><span>Return to a room <small>{recentRooms.length}</small></span><div className="recent-room-list">{recentRooms.map((room) => <a key={room.code} href={`/room/${room.code}`}><i><Radio /></i><strong>{room.name}</strong><small>{room.code}</small><ArrowRight /></a>)}</div></div>}
       </form>
     </section>
     <footer><a className="brand" href="/"><span className="brand-mark"><Radio size={16} /></span> connectify</a><nav aria-label="Connectify information"><a href="/features">Features</a><a href="/how-it-works">How it works</a><a href="/faq">FAQ</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Made for music and good company.</span></footer>

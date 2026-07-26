@@ -11,8 +11,9 @@ import { useRoomDna } from "./room/useRoomDna";
 import "./room/room-enhancements.css";
 
 const LazyFeatureModal = lazy(() => import("./room/FeatureModal"));
-function FeatureModal(props: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
-  return <Suspense fallback={null}><LazyFeatureModal {...props} /></Suspense>;
+function FeatureModal(props: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode; variant?: "default" | "wide" | "showcase" }) {
+  const variant = props.variant ?? (props.title === "Room DNA" ? "showcase" : props.title === "Host Controls" || props.title === "Listener moderation" ? "wide" : "default");
+  return <Suspense fallback={null}><LazyFeatureModal {...props} variant={variant} /></Suspense>;
 }
 const avatars = ["🌻", "🪩", "🎧", "🌙", "🛼", "✨"];
 const reactionChoices = ["🔥", "💜", "🥹", "🕺", "✨"] as const;
@@ -36,6 +37,8 @@ const activityText = (event: Pick<RoomActivity, "actorName" | "action" | "target
     skipped_track: "skipped the track",
     cleared_queue: "cleared the queue",
     removed_member: `removed${target}`,
+    blocked_member: `blocked${target}`,
+    unblocked_member: `unblocked${target}`,
     handed_off_host: `handed host access to${target}`,
     bulk_remove: `removed${target}`,
     bulk_top: `moved${target} to the top`,
@@ -92,6 +95,7 @@ export function RoomPage({ code }: { code: string }) {
   const [membersOpen, setMembersOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [hostOpen, setHostOpen] = useState(false);
+  const [moderationOpen, setModerationOpen] = useState(false);
   const [identityOpen, setIdentityOpen] = useState(false);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -140,6 +144,7 @@ export function RoomPage({ code }: { code: string }) {
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersHasMore, setMembersHasMore] = useState(false);
   const [memberCursor, setMemberCursor] = useState<string | null>(null);
+  const [blockedMembers, setBlockedMembers] = useState<RoomMember[]>([]);
   const [historyTracks, setHistoryTracks] = useState<Track[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyHasMore, setHistoryHasMore] = useState(false);
@@ -313,7 +318,8 @@ export function RoomPage({ code }: { code: string }) {
         }
       });
       connection.on("queue:removed", (removed: { trackId: string; title: string }) => { setRemovedTrack(removed); window.setTimeout(() => setRemovedTrack((current) => current?.trackId === removed.trackId ? null : current), 8000); });
-      connection.on("room:kicked", () => { window.alert("The host removed you from this room."); window.location.href = "/"; });
+      connection.on("room:removed", () => { window.alert("The host removed you from this room. You can rejoin with the room link."); window.location.href = "/"; });
+      connection.on("room:kicked", () => { window.alert("The host blocked this guest identity from the room."); window.location.href = "/"; });
       connection.on("room:host-role", ({ role: nextRole }: { role: "host" | "guest" }) => {
         setRole(nextRole);
         if (nextRole === "guest") removeHostToken(code);
@@ -341,8 +347,18 @@ export function RoomPage({ code }: { code: string }) {
 
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest(".menu-wrap")) { setRoomMenu(false); setQueueMenu(false); } };
+    const closeMenusWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setRoomMenu(false);
+        setQueueMenu(false);
+      }
+    };
     document.addEventListener("mousedown", closeMenus);
-    return () => document.removeEventListener("mousedown", closeMenus);
+    document.addEventListener("keydown", closeMenusWithKeyboard);
+    return () => {
+      document.removeEventListener("mousedown", closeMenus);
+      document.removeEventListener("keydown", closeMenusWithKeyboard);
+    };
   }, []);
 
   useEffect(() => {
@@ -433,6 +449,12 @@ export function RoomPage({ code }: { code: string }) {
       } : previous);
     });
   }, [socket, membersLoading, membersHasMore, memberCursor]);
+  const loadBlockedMembers = useCallback(() => {
+    if (!socket) return;
+    socket.emit("room:blocked-members", {}, (result: { ok: boolean; members?: RoomMember[] }) => {
+      if (result?.ok && result.members) setBlockedMembers(result.members);
+    });
+  }, [socket]);
   const loadHistory = useCallback((reset = false) => {
     if (!socket || historyLoading || (!reset && !historyHasMore)) return;
     setHistoryLoading(true);
@@ -706,7 +728,26 @@ export function RoomPage({ code }: { code: string }) {
     } : previous);
     emitReliable(socket, "queue:remove", { trackId: track.id, operationId: newOperationId() }, (result: { ok: boolean; error?: string }) => { if (!result?.ok) requestSync(); });
   };
-  const kickMember = (memberId: string, name: string) => { if (window.confirm(`Remove ${name} and prevent them from rejoining?`)) socket?.emit("room:kick", { memberId }); };
+  const removeMember = (memberId: string, name: string) => {
+    if (!window.confirm(`Remove ${name} from the room now? They can use the link to rejoin.`)) return;
+    socket?.emit("room:remove", { memberId }, (result: { ok: boolean; error?: string }) => {
+      if (!result?.ok) setError(result?.error || `Could not remove ${name}.`);
+    });
+  };
+  const blockMember = (memberId: string, name: string) => {
+    if (!window.confirm(`Block ${name} from this room? This guest identity cannot rejoin until you unblock it.`)) return;
+    socket?.emit("room:kick", { memberId }, (result: { ok: boolean; error?: string }) => {
+      if (!result?.ok) setError(result?.error || `Could not block ${name}.`);
+      else loadBlockedMembers();
+    });
+  };
+  const unblockMember = (memberId: string, name: string) => {
+    socket?.emit("room:unblock", { memberId }, (result: { ok: boolean; error?: string }) => {
+      if (!result?.ok) setError(result?.error || `Could not unblock ${name}.`);
+      else setBlockedMembers((members) => members.filter((member) => member.id !== memberId));
+    });
+  };
+  const kickMember = removeMember;
   const clearQueue = () => { if (window.confirm("Clear the entire queue and listening history?")) socket?.emit("queue:clear", {}, () => setQueueMenu(false)); };
   const sendChat = (event: React.FormEvent) => {
     event.preventDefault(); if (!chatBody.trim() || !socket) return;
@@ -890,6 +931,7 @@ export function RoomPage({ code }: { code: string }) {
           <button onClick={() => setIdentityOpen(true)}>Edit name &amp; avatar</button>
           {isHost && <button onClick={() => setLimitsOpen(true)}><ShieldCheck />Limits</button>}
           {isHost && <button onClick={() => { setActivityOpen(true); if (!activities.length) loadActivity(true); }}><Activity />Activity</button>}
+          {isHost && <button onClick={() => { setModerationOpen(true); if (!room.members.length) loadMembers(true); loadBlockedMembers(); }}><UserMinus />Moderate</button>}
         </div>
         {tutorialVisible && <aside className="room-tutorial"><Sparkles /><div><strong>New here?</strong><span>Add or search for a video, then use Queue and Chat to shape the room together.</span></div><button onClick={() => { localStorage.setItem("connectify.roomTutorialDismissed", "true"); setTutorialVisible(false); }}>Got it</button><button className="tutorial-skip" onClick={() => { localStorage.setItem("connectify.roomTutorialDismissed", "true"); setTutorialVisible(false); }} aria-label="Dismiss tutorial"><X /></button></aside>}
         <div className="now-card">
@@ -981,6 +1023,23 @@ export function RoomPage({ code }: { code: string }) {
     {membersOpen && <FeatureModal title="Room Profile" icon={<Users />} onClose={() => setMembersOpen(false)}><div className="room-profile-card"><span>PERMANENT ROOM</span><strong>{room.name}</strong><p>Room {room.code} · Created {new Date(room.createdAt).toLocaleDateString()}</p><button onClick={copyInvite}><Link2 />{copied ? "Link copied" : "Copy permanent room link"}</button></div><div className="profile-section"><h3><Users /> Members <small>{room.memberCount ?? room.members.length}</small></h3><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Host" : `Last seen ${new Date(member.lastSeenAt).toLocaleDateString()}`}</small></span>{member.role === "host" && <b>HOST</b>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div><div className="profile-section"><h3><Palette /> Room theme</h3><div className="theme-picker">{(["violet", "sunset", "ocean", "mono"] as RoomTheme[]).map((theme) => <button key={theme} className={`${theme} ${room.theme === theme ? "active" : ""}`} disabled={!isHost} onClick={() => updateSettings({ theme })} title={theme}><i /></button>)}</div></div></FeatureModal>}
     {historyOpen && <FeatureModal title="Listening History" icon={<History />} onClose={() => setHistoryOpen(false)}>{historyTracks.length ? <><div className="history-list">{historyTracks.map((track, index) => <button key={track.id} disabled={!canControl} onClick={() => { setRoom((previous) => previous && !previous.tracks.some((item) => item.id === track.id) ? { ...previous, tracks: [...previous.tracks, track] } : previous); setPlayback(track, true, 0); setHistoryOpen(false); }}><span>{index + 1}</span><img src={track.thumbnail || ""} alt="" /><div><strong>{track.title}</strong><small>{track.artist} · Added by {track.addedBy}</small></div><Play /></button>)}</div>{historyHasMore && <button className="load-page" onClick={() => loadHistory(false)}>Load more history</button>}</> : historyLoading ? <p className="page-loading">Loading listening history…</p> : <div className="modal-empty"><History /><strong>No listening history yet</strong><span>Finished and skipped songs will stay here for returning members.</span></div>}</FeatureModal>}
     {hostOpen && <FeatureModal title="Host Controls" icon={<ShieldCheck />} onClose={() => setHostOpen(false)}><p className="modal-intro">These rules are enforced by the room server.</p><div className="recovery-card"><KeyRound /><div><strong>Room recovery key</strong><span>Save this somewhere private. It restores host access on another device.</span></div><button onClick={() => void copyRecoveryKey()}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy key"}</button></div><div className="host-settings"><button onClick={() => updateSettings({ isLocked: !room.isLocked })}><span><Lock /><b>Lock room</b><small>Only returning members can join.</small></span><i className={room.isLocked ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanControl: !room.guestsCanControl })}><span><Play /><b>Guest playback controls</b><small>Allow guests to play, seek, skip, and reorder.</small></span><i className={room.guestsCanControl ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanAdd: !room.guestsCanAdd })}><span><Plus /><b>Guest song submissions</b><small>Allow guests to add URLs to the queue.</small></span><i className={room.guestsCanAdd ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ discoverable: !room.discoverable })}><span><Library /><b>Contribute to discovery</b><small>Let video metadata from this room appear in Connectify Library results. Room and member details stay private.</small></span><i className={room.discoverable ? "toggle on" : "toggle"} /></button><label><span><ListMusic /><b>Upcoming songs per guest</b><small>Prevents one listener from flooding the queue.</small></span><select value={room.maxSongsPerUser} onChange={(event) => updateSettings({ maxSongsPerUser: Number(event.target.value) })}>{[1,2,3,5,8,10,15,20].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><div className="profile-section moderation"><h3><Users /> Members and host handoff</h3><p className="section-help">Handoff rotates the recovery key and works only for someone currently online.</p><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Room host" : people.some((person) => person.userId === member.userId) ? "Online" : "Offline"}</small></span>{member.role === "guest" && <div className="member-actions">{people.some((person) => person.userId === member.userId) && <button className="handoff" onClick={() => handoffHost(member)} title={`Make ${member.name} the host`}><UserRoundCheck /></button>}<button onClick={() => kickMember(member.id, member.name)} title={`Remove ${member.name}`}><UserMinus /></button></div>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div></FeatureModal>}
+    {moderationOpen && <FeatureModal title="Listener moderation" icon={<UserMinus />} onClose={() => setModerationOpen(false)}>
+      <p className="modal-intro">Removing disconnects someone now; blocking prevents this guest identity from rejoining until you unblock it.</p>
+      <div className="moderation-groups">
+        <section>
+          <h3>Room members</h3>
+          <div className="moderation-list">{room.members.filter((member) => member.role !== "host").map((member) => <article key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{people.some((person) => person.userId === member.userId) ? "Online now" : "Offline"}</small></span><div><button onClick={() => removeMember(member.id, member.name)}>Remove now</button><button className="danger" onClick={() => blockMember(member.id, member.name)}>Block</button></div></article>)}</div>
+          {membersLoading && <p className="page-loading">Loading members…</p>}
+          {membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}
+          {!room.members.some((member) => member.role !== "host") && <p className="section-help">No guests have joined this room yet.</p>}
+        </section>
+        <section>
+          <h3>Blocked identities <small>{blockedMembers.length}</small></h3>
+          <div className="moderation-list">{blockedMembers.map((member) => <article key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>Blocked from this room</small></span><div><button onClick={() => unblockMember(member.id, member.name)}>Unblock</button></div></article>)}</div>
+          {!blockedMembers.length && <p className="section-help">No one is blocked.</p>}
+        </section>
+      </div>
+    </FeatureModal>}
     {recoveryOpen && <FeatureModal title="Recover Host Access" icon={<KeyRound />} onClose={() => setRecoveryOpen(false)}><p className="modal-intro">Paste the private recovery key saved by the room host. Recovering access makes this device the host and demotes the previous host.</p><form className="recover-host-form" onSubmit={recoverHost}><input value={recoveryInput} onChange={(event) => setRecoveryInput(event.target.value)} placeholder="Room recovery key" autoComplete="off" /><button className="primary" disabled={!recoveryInput.trim()}><KeyRound />Recover room</button></form></FeatureModal>}
   </main>;
 }
