@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="310" height="80" viewBox="0 0 310 80">
+  <rect x="4" y="4" width="72" height="72" rx="23" fill="#502D55"/>
+  <path d="M14 26C24 15 44.5 13 59 21v17C47.7 30.3 30 31 14 40Z" fill="#935073" opacity=".25"/>
+  <g fill="none" stroke="#F6DBC0" stroke-width="5.5" stroke-linecap="round">
+    <path d="M29 21c-8.5 7-8.5 19 0 26M51 21c8.5 7 8.5 19 0 26"/>
+    <path d="M35 28c-4 3.5-4 9.5 0 13M45 28c4 3.5 4 9.5 0 13"/>
+  </g>
+  <circle cx="40" cy="34.5" r="4.3" fill="#E9C45A"/>
+  <text x="94" y="51" fill="#F8F4E9" font-family="'Segoe UI Variable Display','Segoe UI',Arial,sans-serif" font-size="38" font-weight="800" letter-spacing="-1.8">connectıfy</text>
+  <circle cx="237.8" cy="22.7" r="2.5" fill="#E9C45A"/>
+</svg>

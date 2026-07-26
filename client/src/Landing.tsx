@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight, Headphones, Link2, ListMusic, Radio, Sparkles } from "lucide-react";
 import { api, waitForBackend } from "./api";
 import { DEFAULT_IDENTITY, getIdentity, getRecentRooms, saveHostToken, saveIdentity, type Identity, type RecentRoom } from "./identity";
+import { Brand } from "./Brand";
 
 export function Landing() {
   const [identity, setIdentity] = useState<Identity>(DEFAULT_IDENTITY);
@@ -48,7 +49,7 @@ export function Landing() {
 
   return <main className="landing">
     <nav className="landing-nav">
-      <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
+      <Brand />
       <button className="text-button" onClick={() => { setMode("join"); document.querySelector(".room-card")?.scrollIntoView({ behavior: "smooth" }); }}>Join a room</button>
     </nav>
 
@@ -101,6 +102,6 @@ export function Landing() {
         {recentRooms.length > 0 && <div className="recent-rooms"><span>Return to a room <small>{recentRooms.length}</small></span><div className="recent-room-list">{recentRooms.map((room) => <a key={room.code} href={`/room/${room.code}`}><i><Radio /></i><strong>{room.name}</strong><small>{room.code}</small><ArrowRight /></a>)}</div></div>}
       </form>
     </section>
-    <footer><a className="brand" href="/"><span className="brand-mark"><Radio size={16} /></span> connectify</a><nav aria-label="Connectify information"><a href="/features">Features</a><a href="/how-it-works">How it works</a><a href="/faq">FAQ</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Made for music and good company.</span></footer>
+    <footer><Brand compact /><nav aria-label="Connectify information"><a href="/features">Features</a><a href="/how-it-works">How it works</a><a href="/faq">FAQ</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Made for music and good company.</span></footer>
   </main>;
 }

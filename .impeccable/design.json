@@ -14,6 +14,12 @@
     "ivory": "#f8f4e9",
     "signal": "#e9c45a"
   },
+  "brand": {
+    "mark": "deep-plum rounded square with paired peach broadcast arcs and one muted-gold core",
+    "wordmark": "lowercase compact ivory display type",
+    "compactUse": "standalone mark for favicons, installed-app icons, notifications, and narrow mobile headers",
+    "prohibited": ["old bright-yellow tile", "room-theme recoloring", "generic radio-library icon as logo"]
+  },
   "constraints": {
     "minimumBodyPx": 14,
     "minimumMetadataPx": 11,

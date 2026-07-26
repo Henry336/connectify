@@ -1,27 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
-    <radialGradient id="glow" cx="70%" cy="30%" r="75%">
-      <stop offset="0" stop-color="#6f43db" stop-opacity=".55"/>
-      <stop offset="1" stop-color="#0a0910" stop-opacity="0"/>
+    <radialGradient id="plum-glow" cx="82%" cy="23%" r="72%">
+      <stop offset="0" stop-color="#935073" stop-opacity=".38"/>
+      <stop offset=".52" stop-color="#502D55" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#0F0A12" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#f9d65e"/><stop offset="1" stop-color="#d7ac34"/>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#281C2D"/>
+      <stop offset="1" stop-color="#17101B"/>
     </linearGradient>
   </defs>
-  <rect width="1200" height="630" fill="#0a0910"/>
-  <rect width="1200" height="630" fill="url(#glow)"/>
-  <circle cx="910" cy="315" r="190" fill="#14121c" stroke="#ffffff" stroke-opacity=".1" stroke-width="3"/>
-  <circle cx="910" cy="315" r="134" fill="none" stroke="#8b5cf6" stroke-opacity=".28" stroke-width="24"/>
-  <circle cx="910" cy="315" r="76" fill="url(#gold)"/>
-  <rect x="88" y="90" width="68" height="68" rx="20" fill="url(#gold)"/>
-  <g fill="none" stroke="#17121d" stroke-width="7" stroke-linecap="round">
-    <path d="M111 124a11 11 0 0 1 22 0"/><path d="M101 124a21 21 0 0 1 42 0"/><path d="M122 124h1"/>
+  <rect width="1200" height="630" fill="#0F0A12"/>
+  <rect width="1200" height="630" fill="url(#plum-glow)"/>
+  <path d="M0 535C220 472 387 542 567 513s350-141 633-89v206H0Z" fill="#502D55" opacity=".18"/>
+  <rect x="78" y="62" width="1044" height="506" rx="42" fill="url(#panel)" stroke="#F8F4E9" stroke-opacity=".11" stroke-width="2"/>
+
+  <g transform="translate(110 98)">
+    <rect width="76" height="76" rx="24" fill="#502D55"/>
+    <path d="M12 27C23 15 45 13 63 22v19C49 32 29 33 12 43Z" fill="#935073" opacity=".28"/>
+    <g fill="none" stroke="#F6DBC0" stroke-width="6" stroke-linecap="round">
+      <path d="M25 20c-11 9-11 27 0 36M51 20c11 9 11 27 0 36"/>
+      <path d="M32 28c-5 5-5 15 0 20M44 28c5 5 5 15 0 20"/>
+    </g>
+    <circle cx="38" cy="38" r="5" fill="#E9C45A"/>
   </g>
-  <text x="178" y="141" fill="#f8f6fb" font-family="Arial, sans-serif" font-size="43" font-weight="700">connectify</text>
-  <text x="88" y="290" fill="#f8f6fb" font-family="Arial, sans-serif" font-size="70" font-weight="800">Better together.</text>
-  <text x="88" y="365" fill="#f5ce55" font-family="Arial, sans-serif" font-size="70" font-weight="800">Right on time.</text>
-  <text x="92" y="438" fill="#b8b3c2" font-family="Arial, sans-serif" font-size="29">Free synchronized YouTube listening rooms and watch parties.</text>
-  <g transform="translate(90 500)">
-    <circle cx="9" cy="9" r="9" fill="#52d399"/><text x="31" y="18" fill="#ded9e5" font-family="Arial, sans-serif" font-size="24">No account needed</text>
+  <text x="210" y="151" fill="#F8F4E9" font-family="'Segoe UI Variable Display','Segoe UI',Arial,sans-serif" font-size="48" font-weight="800" letter-spacing="-2">connectıfy</text>
+  <circle cx="391" cy="116" r="3" fill="#E9C45A"/>
+
+  <text x="110" y="287" fill="#F8F4E9" font-family="'Segoe UI Variable Display','Segoe UI',Arial,sans-serif" font-size="76" font-weight="800" letter-spacing="-3">Better together.</text>
+  <text x="110" y="370" fill="#F6DBC0" font-family="'Segoe UI Variable Display','Segoe UI',Arial,sans-serif" font-size="76" font-weight="800" letter-spacing="-3">Right on time.</text>
+  <text x="114" y="434" fill="#BBAFBE" font-family="'Segoe UI Variable Text','Segoe UI',Arial,sans-serif" font-size="27">Free synchronized YouTube listening rooms and watch parties.</text>
+  <g transform="translate(114 493)" fill="none" stroke="#E9C45A" stroke-width="3.5" stroke-linecap="round">
+    <path d="M6 2c-6 5-6 13 0 18M18 2c6 5 6 13 0 18"/>
+    <circle cx="12" cy="11" r="2" fill="#E9C45A" stroke="none"/>
+  </g>
+  <text x="151" y="514" fill="#D8CDD8" font-family="'Segoe UI Variable Text','Segoe UI',Arial,sans-serif" font-size="23">No account needed · Paste a link and start listening</text>
+
+  <g transform="translate(820 177)">
+    <circle cx="124" cy="124" r="122" fill="#0F0A12" stroke="#F8F4E9" stroke-opacity=".11" stroke-width="2"/>
+    <circle cx="124" cy="124" r="88" fill="none" stroke="#502D55" stroke-width="24" opacity=".9"/>
+    <circle cx="124" cy="124" r="54" fill="none" stroke="#935073" stroke-width="10" opacity=".4"/>
+    <rect x="82" y="82" width="84" height="84" rx="27" fill="#502D55"/>
+    <g fill="none" stroke="#F6DBC0" stroke-width="7" stroke-linecap="round">
+      <path d="M107 98c-13 11-13 41 0 52M141 98c13 11 13 41 0 52"/>
+      <path d="M116 109c-6 6-6 24 0 30M132 109c6 6 6 24 0 30"/>
+    </g>
+    <circle cx="124" cy="124" r="6" fill="#E9C45A"/>
   </g>
 </svg>

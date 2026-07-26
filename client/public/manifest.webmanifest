@@ -4,8 +4,11 @@
   "description": "Listen and watch together in synchronized rooms.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0910",
-  "theme_color": "#0a0910",
-  "icons": [{ "src": "/connectify.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }],
+  "background_color": "#0f0a12",
+  "theme_color": "#502d55",
+  "icons": [
+    { "src": "/connectify.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/connectify-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
   "share_target": { "action": "/share", "method": "GET", "enctype": "application/x-www-form-urlencoded", "params": { "title": "title", "text": "text", "url": "url" } }
 }

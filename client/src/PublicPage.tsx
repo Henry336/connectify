@@ -1,4 +1,5 @@
-import { ArrowRight, Check, Headphones, Link2, ListMusic, Radio, Search, ShieldCheck, Sparkles, Users, Youtube } from "lucide-react";
+import { ArrowRight, Check, Headphones, Link2, ListMusic, Search, ShieldCheck, Sparkles, Users, Youtube } from "lucide-react";
+import { Brand } from "./Brand";
 
 type PageContent = {
   eyebrow: string;
@@ -98,7 +99,7 @@ export function PublicPage({ path }: { path: string }) {
   const icons = [<Headphones />, <ListMusic />, <Users />, <Search />, <Youtube />, <ShieldCheck />, <Link2 />, <Sparkles />];
   return <main className="public-page">
     <nav className="landing-nav">
-      <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
+      <Brand />
       <div className="public-nav-links"><a href="/listen-together">Listen together</a><a href="/watch-party">Watch party</a><a href="/features">Features</a><a href="/faq">FAQ</a></div>
       <a className="secondary" href="/#start">Create a room</a>
     </nav>
@@ -109,6 +110,6 @@ export function PublicPage({ path }: { path: string }) {
         <div><h2>{section.title}</h2><p>{section.body}</p>{section.points && <ul>{section.points.map((point) => <li key={point}><Check />{point}</li>)}</ul>}</div>
       </article>)}
     </section>
-    <footer><a className="brand" href="/"><span className="brand-mark"><Radio size={16} /></span> connectify</a><nav><a href="/how-it-works">How it works</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Free shared listening rooms.</span></footer>
+    <footer><Brand compact /><nav><a href="/how-it-works">How it works</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Free shared listening rooms.</span></footer>
   </main>;
 }

@@ -49,6 +49,20 @@ textarea { font: inherit; }
 
 ::selection { color: var(--canvas); background: var(--peach); }
 
+/* Brand system */
+.brand {
+  color: var(--ivory);
+  font-family: var(--font-display);
+  font-weight: 800;
+}
+.brand-mark-field { fill: var(--plum); }
+.brand-mark-sheen { fill: var(--mauve); }
+.brand-mark-wave { stroke: var(--peach); }
+.brand-mark-core-halo,
+.brand-mark-core { fill: var(--signal); }
+.brand-wordmark { color: var(--ivory); }
+.brand-wordmark-signal::after { background: var(--signal); }
+
 /* Landing and room history */
 .landing,
 .public-page {

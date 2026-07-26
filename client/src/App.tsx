@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Landing } from "./Landing";
 import { PublicPage, publicPaths } from "./PublicPage";
+import { Brand } from "./Brand";
 
 const RoomPage = lazy(() => import("./RoomPage").then((module) => ({ default: module.RoomPage })));
 const ShareTarget = lazy(() => import("./ShareTarget").then((module) => ({ default: module.ShareTarget })));
@@ -16,7 +17,7 @@ export function AppRouter({ pathname }: { pathname: string }) {
 }
 
 function PageLoader() {
-  return <main className="room-loading"><a className="brand" href="/">connectify</a><div className="loading-record" /><p>Opening your room…</p></main>;
+  return <main className="room-loading"><Brand /><div className="loading-record" /><p>Opening your room…</p></main>;
 }
 
 export default function App() { return <AppRouter pathname={window.location.pathname} />; }

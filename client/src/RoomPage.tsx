@@ -8,6 +8,7 @@ import type { ChatMessage, Moment, PartyMode, Person, Room, RoomActivity, RoomMe
 import { YouTubePlayer, type YouTubePlayerHandle } from "./YouTubePlayer";
 import { ChatMessageRow, formatTime, PlaybackProgress, SearchResult } from "./room/RoomUi";
 import { useRoomDna } from "./room/useRoomDna";
+import { Brand } from "./Brand";
 import "./room/room-enhancements.css";
 
 const LazyFeatureModal = lazy(() => import("./room/FeatureModal"));
@@ -879,7 +880,7 @@ export function RoomPage({ code }: { code: string }) {
   }, [current?.id, current?.title, current?.artist, current?.thumbnail, current?.duration, room?.name, room?.isPlaying, room?.revision, setPlayback, seekPlayback, skip]);
 
   if (!room) return <main className="room-loading">
-    <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
+    <Brand />
     {error ? <section className="loading-failure">
       <span><WifiOff /></span>
       <h2>{error}</h2>
@@ -911,7 +912,7 @@ export function RoomPage({ code }: { code: string }) {
 
   return <main className={`room-shell theme-${room.theme} ${room.partyMode === "watch_party" ? "watch-party" : ""}`}>
     <header className="room-nav">
-      <a className="brand" href="/"><span className="brand-mark"><Radio size={19} /></span> connectify</a>
+      <Brand />
       <div className="room-title-mobile"><strong>{room.name}</strong><span><Radio aria-hidden="true" /> Live</span></div>
       <div className="room-nav-actions">
         <div className="listeners"><div className="avatar-stack">{people.slice(0, 4).map((person, index) => <i key={person.id} title={`${person.name}${person.role === "host" ? " · Host" : ""}`}>{person.avatar || avatars[index]}</i>)}</div><span>{people.length} listening</span></div>

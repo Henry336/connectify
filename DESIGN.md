@@ -29,6 +29,16 @@
 
 Peach and ivory carry active emphasis and readable type. Plum creates structure. Mauve is used for selected and primary actions. Signal gold is reserved for live-room and broadcast cues.
 
+## Brand mark
+
+- The primary mark is a deep-plum rounded square containing paired peach broadcast arcs and one muted-gold signal core.
+- The arcs represent listeners on either side of one shared moment; the central signal is the only gold element.
+- The wordmark is lowercase, compact, and ivory. Its weight and tracking match the product's display typography.
+- Use the complete horizontal logo in roomy headers, footers, loading states, and social material.
+- Use the standalone mark for favicons, installed-app icons, narrow mobile headers, and notification artwork.
+- At 16–32px, preserve the thick arc geometry and remove decorative detail before sacrificing legibility.
+- Do not restore the old bright-yellow tile, recolor the mark per room theme, or substitute a generic radio-library icon.
+
 ## Type and scale
 
 - UI/body: `Segoe UI Variable Text`, Aptos, system sans-serif.
