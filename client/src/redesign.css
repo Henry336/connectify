@@ -58,8 +58,15 @@ textarea { font: inherit; }
     var(--canvas);
 }
 
-.landing-nav,
 .room-nav {
+  border-color: var(--line);
+  background: rgba(15, 10, 18, .92);
+}
+.landing-nav {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding-inline: max(28px, calc((100vw - 1200px) / 2 + 28px));
   border-color: var(--line);
   background: rgba(15, 10, 18, .92);
 }
@@ -74,10 +81,42 @@ textarea { font: inherit; }
 .sync-pill.correcting { color: var(--mauve-bright); border-color: rgba(197, 125, 163, .24); background: rgba(80, 45, 85, .24); }
 
 .room-card,
-.benefits > div,
 .public-card {
   border-color: var(--line);
   background: linear-gradient(155deg, rgba(40, 27, 45, .9), rgba(24, 17, 28, .96));
+}
+
+.benefits {
+  gap: 64px;
+  align-items: start;
+}
+.benefits > div {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.benefits > div + div::before {
+  content: "";
+  position: absolute;
+  inset-block: 4px;
+  inset-inline-start: -32px;
+  width: 1px;
+  background: linear-gradient(transparent, rgba(248, 244, 233, .12), transparent);
+}
+.benefits > div > span {
+  color: var(--signal);
+  background: rgba(233, 196, 90, .09);
+}
+.benefits h3 {
+  color: var(--ivory);
+  font-size: 18px;
+}
+.benefits p {
+  max-width: 30ch;
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .room-card label { color: var(--text-muted); font-size: 13px; }
@@ -170,10 +209,9 @@ textarea { font: inherit; }
   grid-template-columns: minmax(620px, 1fr) minmax(420px, 480px);
 }
 .listening-pane { padding: 30px clamp(28px, 4vw, 72px) 52px; }
-.listening-pane > :where(.room-heading, .room-qol-strip, .room-tutorial, .party-mode-banner, .now-card, .search-shell, .inline-error, .moment-strip) {
+.room-shell .listening-pane > :where(.room-heading, .room-qol-strip, .room-tutorial, .party-mode-banner, .now-card, .search-shell, .inline-error, .moment-strip) {
   width: min(100%, 860px);
-  margin-left: auto;
-  margin-right: auto;
+  margin-inline: auto;
 }
 .room-heading { margin-bottom: 18px; }
 .room-heading > a { width: 42px; height: 42px; border-radius: 12px; background: var(--surface); }
@@ -181,7 +219,7 @@ textarea { font: inherit; }
 .live-label { color: var(--text-muted); font-size: 11px; letter-spacing: .12em; }
 .live-label svg { color: var(--signal); }
 
-.room-qol-strip { margin-top: 0; margin-bottom: 18px; gap: 8px; font-size: 12px; }
+.room-shell .room-qol-strip { margin: 0 auto 18px; gap: 8px; font-size: 12px; }
 .room-qol-strip > span,
 .room-qol-strip > button {
   min-height: 40px;
@@ -195,7 +233,7 @@ textarea { font: inherit; }
 
 .party-mode-banner,
 .room-tutorial { border-color: rgba(147, 80, 115, .38); background: rgba(80, 45, 85, .25); }
-.room-tutorial { margin-bottom: 18px; padding: 14px 16px; }
+.room-shell .room-tutorial { margin: 0 auto 18px; padding: 14px 16px; }
 .room-tutorial strong { font-size: 15px; }
 .room-tutorial span { font-size: 13px; line-height: 1.45; }
 .room-tutorial button { min-height: 40px; }
@@ -362,6 +400,25 @@ textarea { font: inherit; }
 .member-list small { font-size: 11px; }
 .member-actions button { min-width: 40px; min-height: 40px; }
 
+.recovery-card {
+  margin: 20px 0;
+  padding: 15px 16px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 12px;
+  border-radius: 14px;
+}
+.recovery-card > svg { width: 21px; }
+.recovery-card > div { min-width: 0; gap: 4px; }
+.recovery-card strong { color: var(--ivory); font-size: 14px; line-height: 1.25; }
+.recovery-card span { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.recovery-card button {
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--peach);
+  font-size: 12px;
+}
+.recovery-card button svg { width: 15px; }
+
 /* Unified scrollbars */
 * { scrollbar-width: thin; scrollbar-color: #65466d #17101b; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -378,6 +435,9 @@ textarea { font: inherit; }
 }
 
 @media (max-width: 720px) {
+  .landing-nav { padding-inline: 18px; }
+  .benefits { gap: 36px; }
+  .benefits > div + div::before { display: none; }
   .room-nav { height: 68px; }
   .room-content { min-height: calc(100vh - 68px); }
   .listening-pane { padding: 18px 12px 30px; }
