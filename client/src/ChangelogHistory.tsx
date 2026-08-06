@@ -30,10 +30,6 @@ export function ChangelogHistory({ onClose }: { onClose: () => void }) {
             ))}
           </section>
         ))}
-        <p className="whats-new-signoff">
-          That covers the last {RELEASES.length === 1 ? "update" : `${RELEASES.length} updates`}. Older releases stay listed in{" "}
-          <a href="https://github.com/Henry336/connectify/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer">CHANGELOG.md</a>.
-        </p>
       </div>
     </FeatureModal>
   );
