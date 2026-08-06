@@ -37,7 +37,21 @@
    reaching it required scrolling the whole page every time. */
 @media (min-width: 1121px) {
   .video-stage { aspect-ratio: 16 / 6; }
-  .room-shell .listening-pane { padding-top: 14px; }
+  .room-shell .listening-pane {
+    padding-top: 14px;
+    padding-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    /* Centers the stack when it's shorter than the column (the common case now that it
+       fits without scrolling). "safe" falls back to top-aligned if a taller stack ever
+       needs to scroll again, so content never centers itself half off-screen. */
+    justify-content: center;
+    justify-content: safe center;
+  }
+  /* Without this, flex-column makes every child shrinkable by default: a genuinely
+     tall stack (tutorial + party-mode banners) would compress the video and controls
+     to fit instead of scrolling past them, which is worse than the original bug. */
+  .room-shell .listening-pane > * { flex-shrink: 0; }
   .room-heading { margin-bottom: 8px; }
   .room-shell .room-qol-strip { margin-bottom: 8px; }
   .now-card { padding-top: 10px; padding-bottom: 12px; }
