@@ -140,6 +140,33 @@ Never commit real values, and never paste a secret into a chat with an AI tool.
 Newest first. Add an entry whenever meaningful work lands: date, tool, what changed,
 current state.
 
+### 2026-08-06 (later) — Claude Code (Opus 5)
+
+Added a user-facing changelog in two places, both written in plain language for listeners
+rather than for developers, and both avoiding em dashes by request:
+
+- **`CHANGELOG.md`** at the repo root is the running record. Newest release first.
+- **In-app "What's new" overlay** (`client/src/WhatsNew.tsx`, `whats-new.css`,
+  `whats-new.ts`), mounted in `App.tsx`. It appears once per device per release, gated on
+  `CHANGELOG_VERSION` stored under `connectify.changelogSeen`. There is deliberately no
+  Escape handler and no backdrop-click dismiss: the button stays disabled until the reader
+  scrolls to the end, then pressing it lights the button, collapses the panel into the
+  app's own loading mark (the `connection-visual` rings and core reused from `RoomPage`),
+  and fades out. First-ever visitors are skipped, since release notes make no sense for an
+  app someone has not used yet; the version is silently marked seen for them instead.
+
+**Shipping a future release:** add a section to `CHANGELOG.md`, mirror it into the
+`SECTIONS` array in `WhatsNew.tsx`, and bump `CHANGELOG_VERSION` in `whats-new.ts`.
+
+**Verified in a real browser** (Vite dev server, not just types): the overlay renders with
+all sections, the button stays disabled until the scroll container reaches the end, the
+hint text switches, the version persists on click, the phases advance
+reading → launching → closing, and the overlay unmounts leaving the app usable. The CSS
+collapse rule was confirmed to apply by toggling the class with transitions disabled
+(660px → 210px). **The animation itself was not visually verified** — the automated
+browser pane was not compositing frames, so transitions never advanced and screenshots
+were unavailable. Worth one human look on a real device.
+
 ### 2026-08-06 — Claude Code (Opus 5)
 
 **Shipped, merged to `main`:**
