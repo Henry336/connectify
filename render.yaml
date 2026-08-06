@@ -19,3 +19,7 @@ services:
         sync: false
       - key: YOUTUBE_API_KEY
         sync: false
+      # Second Google Cloud project's key, dedicated to automated Library growth so it
+      # never competes with user-facing live search. Optional.
+      - key: YOUTUBE_SEED_API_KEY
+        sync: false

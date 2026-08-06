@@ -61,12 +61,14 @@ model Track {
   playNext   Boolean  @default(false)
   autoplayBlocked Boolean @default(false)
   autoplayReason  String?
+  songKey    String?
   createdAt  DateTime @default(now())
   trackVotes TrackVote[]
   moments    Moment[]
   messages   ChatMessage[]
 
   @@index([roomId, position])
+  @@index([roomId, songKey])
 }
 
 model TrackVote {

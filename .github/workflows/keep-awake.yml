@@ -1,0 +1,53 @@
+# Keeps the Render free web service from spinning down, so visitors do not pay the
+# ~50 second cold start. Render spins a free service down after ~15 minutes with no
+# inbound HTTP traffic, so this pings it well inside that window.
+#
+# Setup: Settings -> Secrets and variables -> Actions -> Variables -> New repository
+# variable, named RENDER_API_URL, e.g. https://connectify-api.onrender.com
+# (no trailing slash). Without it the workflow no-ops instead of failing loudly.
+#
+# The schedule deliberately leaves a nightly gap. Render's free plan allows 750 instance
+# hours a month and a 31-day month is 744 hours, so pinging 24/7 would sit ~6 hours from
+# suspension. The window below is ~22 hours a day (~690/month), keeping real headroom.
+# Widen or shift it by editing the hour range - GitHub cron is always UTC.
+name: Keep Render awake
+
+on:
+  schedule:
+    - cron: "*/10 0-21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ping the API health endpoint
+        env:
+          RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+        run: |
+          if [ -z "$RENDER_API_URL" ]; then
+            echo "::warning::RENDER_API_URL repository variable is not set; skipping."
+            exit 0
+          fi
+          # GitHub's scheduler can run late under load, so spread several pings across the
+          # slot. /health is intentionally database-free, so this never touches Neon.
+          status=1
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 90 \
+                 --retry 2 --retry-delay 10 --retry-connrefused \
+                 "$RENDER_API_URL/health"; then
+              echo " <- ping $attempt ok"
+              status=0
+            else
+              echo "::warning::ping $attempt failed"
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 180; fi
+          done
+          exit $status

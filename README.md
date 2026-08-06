@@ -74,6 +74,14 @@ Keep the Neon project in AWS Singapore when possible. Existing Render services s
 
 The reliability release adds the `RoomOperation` idempotency table and chat reply relation. Render’s existing build command already runs `npm run db:deploy`, so the checked-in migration is applied automatically before the updated server starts. Deploy the backend before or alongside the frontend; no new environment variables are required.
 
+### Keeping the free service awake
+
+Render's free plan spins a web service down after roughly 15 minutes without inbound HTTP traffic, and waking it costs the visitor a cold start of about a minute. `.github/workflows/keep-awake.yml` prevents that by pinging `/health` (deliberately database-free, so it never touches Neon) every 10 minutes from GitHub Actions—free and unlimited on public repositories, with no third-party uptime account needed.
+
+Set a repository **variable** (not a secret) named `RENDER_API_URL` to the service origin, e.g. `https://connectify-api.onrender.com`, under Settings → Secrets and variables → Actions → Variables. Without it the workflow logs a warning and no-ops.
+
+The schedule covers about 22 hours a day rather than all 24. Render's free plan includes 750 instance hours a month and a 31-day month is 744 hours, so a true 24/7 ping would sit about six hours away from the service being suspended for the rest of the month. The nightly gap keeps real headroom; widen the cron's hour range if you would rather trade that margin for full coverage. Note also that GitHub disables scheduled workflows in repositories with no activity for 60 days.
+
 The frontend calls `/ready` as soon as someone opens the landing page or a direct room link. This wakes Render and executes a minimal Neon query while the visitor is reading the page. A free Render web service can still require a cold start after inactivity; pre-warming moves that delay earlier but cannot guarantee an instant first request.
 
 ### Vercel frontend
