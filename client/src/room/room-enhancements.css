@@ -4,6 +4,13 @@
   --text: var(--ink);
 }
 
+/* Listening History row: play the track, or block it from autoplay revival. */
+.history-row { display: flex; align-items: stretch; gap: 6px; }
+.history-row > button:first-child { flex: 1; min-width: 0; }
+.history-block { flex: 0 0 auto; width: 40px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--text-subtle); background: transparent; }
+.history-block:hover { color: var(--peach); border-color: rgba(226, 120, 120, .4); }
+.history-block svg { width: 16px; }
+
 .room-qol-strip {
   display: flex;
   align-items: center;

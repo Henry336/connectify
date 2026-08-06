@@ -42,6 +42,8 @@ export type ChatMessage = {
   replyToId: string | null;
   replyTo: { id: string; name: string; body: string; spoiler: boolean } | null;
   createdAt: string;
+  operationId?: string;
+  status?: "sending" | "sent" | "failed";
 };
 
 export type PartyMode = "standard" | "pass_aux" | "blind_pick" | "one_take" | "discovery" | "watch_party";
@@ -77,6 +79,7 @@ export type Room = {
   playbackPosition: number;
   startedAt: string | null;
   autopilotEnabled: boolean;
+  autoplayMinBuffer: number;
   partyMode: PartyMode;
   theme: RoomTheme;
   isLocked: boolean;

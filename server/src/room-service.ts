@@ -211,7 +211,7 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
   let resetCycle = false;
   if (direction === 1 && !targetId && room.autopilotEnabled) {
     resetCycle = true;
-    targetId = fairQueueOrder(room.tracks.map((track) => ({ ...track, playedAt: null })), current.id)[0] || current.id;
+    targetId = fairQueueOrder(room.tracks.map((track) => ({ ...track, playedAt: track.autoplayBlocked ? track.playedAt : null })), current.id)[0] || current.id;
   }
   if (direction === -1 && !targetId) targetId = current.id;
 
@@ -224,7 +224,7 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
         : { isPlaying: false, playbackPosition: 0, startedAt: null, revision: { increment: 1 } },
     });
     if (updated.count !== 1) return false;
-    if (resetCycle) await tx.track.updateMany({ where: { roomId: room.id, removedAt: null }, data: { playedAt: null } });
+    if (resetCycle) await tx.track.updateMany({ where: { roomId: room.id, removedAt: null, autoplayBlocked: false }, data: { playedAt: null } });
     if (targetId && targetId !== current.id) {
       if (direction === 1) await tx.track.update({ where: { id: current.id }, data: { playedAt: now } });
       await tx.track.update({ where: { id: targetId }, data: { playedAt: null } });
@@ -234,4 +234,70 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
     }
     return true;
   });
+}
+
+export type RevivalCandidate = {
+  id: string;
+  artist: string;
+  votes: number;
+  playedAt?: Date | string | null;
+  autoplayBlocked?: boolean;
+};
+
+// Chooses which already-played tracks to bring back so the queue keeps a lookahead buffer.
+// Prefers crowd favorites and older plays, and spaces out artists that are already upcoming.
+export function pickRevivals(candidates: RevivalCandidate[], need: number, upcomingArtists: string[] = []) {
+  if (need <= 0) return [];
+  const pool = candidates
+    .filter((track) => !track.autoplayBlocked && track.playedAt)
+    .sort((a, b) => b.votes - a.votes || Number(new Date(a.playedAt as string | Date)) - Number(new Date(b.playedAt as string | Date)));
+  const picked: RevivalCandidate[] = [];
+  const usedArtists = new Set(upcomingArtists.map((artist) => artist.toLowerCase()));
+  for (const track of pool) {
+    if (picked.length >= need) break;
+    if (usedArtists.has(track.artist.toLowerCase())) continue;
+    picked.push(track);
+    usedArtists.add(track.artist.toLowerCase());
+  }
+  // If artist spacing left us short, top up allowing repeats before letting the queue run dry.
+  for (const track of pool) {
+    if (picked.length >= need) break;
+    if (picked.some((item) => item.id === track.id)) continue;
+    picked.push(track);
+  }
+  return picked.map((track) => track.id);
+}
+
+// Proactively refills the queue from room history when Smart Autoplay is on and the
+// lookahead buffer is running low. Runs off the interaction-critical path (no network),
+// bumps the revision optimistically, and returns the revived tracks for broadcast/logging.
+export async function refillAutoplay(code: string) {
+  const room = await prisma.room.findUnique({
+    where: { code },
+    select: {
+      id: true,
+      autopilotEnabled: true,
+      autoplayMinBuffer: true,
+      currentTrackId: true,
+      revision: true,
+      tracks: { where: { removedAt: null }, orderBy: { position: "asc" } },
+    },
+  });
+  if (!room || !room.autopilotEnabled || !room.currentTrackId) return null;
+  const upcoming = fairQueueOrder(room.tracks, room.currentTrackId);
+  const need = room.autoplayMinBuffer - upcoming.length;
+  if (need <= 0) return null;
+  const byId = new Map(room.tracks.map((track) => [track.id, track]));
+  const upcomingArtists = upcoming.map((id) => byId.get(id)?.artist || "").filter(Boolean);
+  const candidates = room.tracks.filter((track) => track.id !== room.currentTrackId && track.playedAt && !track.autoplayBlocked);
+  const reviveIds = pickRevivals(candidates, need, upcomingArtists);
+  if (!reviveIds.length) return null;
+  const committed = await prisma.$transaction(async (tx) => {
+    const bumped = await tx.room.updateMany({ where: { id: room.id, revision: room.revision }, data: { revision: { increment: 1 } } });
+    if (bumped.count !== 1) return false;
+    await tx.track.updateMany({ where: { id: { in: reviveIds }, roomId: room.id, autoplayBlocked: false }, data: { playedAt: null } });
+    return true;
+  });
+  if (!committed) return null;
+  return reviveIds.map((id) => byId.get(id)!).filter(Boolean);
 }

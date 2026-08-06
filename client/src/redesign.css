@@ -320,7 +320,18 @@ textarea { font: inherit; }
 .new-message-divider { color: var(--text-subtle); font-size: 10px; }
 .chat-reply-context strong { color: var(--mauve-bright); font-size: 10px; }
 .chat-reply-context span { font-size: 12px; }
-.chat-composer textarea { color: var(--ivory); font-size: 14px; }
+.chat-compose textarea { color: var(--ivory); font-size: 16px; }
+/* Wall-clock time on each message, kept distinct from the song-moment jump button. */
+.chat-list header .chat-time { margin-left: 6px; color: var(--text-subtle); font-size: 10px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.chat-list header .reply-message { margin-left: auto; }
+.chat-list article.grouped { margin-top: -6px; }
+.chat-list article.grouped > i { visibility: hidden; height: 0; }
+.chat-list article.grouped header strong,
+.chat-list article.grouped header .chat-time { display: none; }
+.chat-status { margin-top: 4px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-subtle); font-size: 10px; }
+.chat-status.failed { color: var(--peach); }
+.chat-status button { min-height: 0; padding: 1px 6px; border: 0; border-radius: 5px; color: var(--mauve-bright); background: rgba(139, 92, 246, .14); font-size: 10px; }
+.chat-list article.is-sending > div { opacity: .72; }
 
 /* Menus stay above Queue and Chat */
 .menu-wrap { position: relative; }
