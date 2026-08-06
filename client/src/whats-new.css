@@ -264,3 +264,30 @@
   .whats-new-morph,
   .whats-new-go { transition: none; animation: none; }
 }
+
+/*
+ * On-demand changelog reader (ChangelogHistory), reachable from the landing page.
+ * Reuses the .whats-new-entry / .whats-new-eyebrow / .whats-new-lead / list styling
+ * above so a release reads the same way here as it did in the first-run overlay --
+ * these rules just add the extra structure a reader with several releases needs that
+ * a single-release overlay didn't: a "Latest" tag and spacing between each release's
+ * own sub-sections.
+ */
+.changelog-history { display: flex; flex-direction: column; }
+.changelog-release.is-latest .whats-new-eyebrow { color: var(--peach, #f6dbc0); }
+.changelog-release.is-latest .whats-new-eyebrow::before { background: var(--peach, #f6dbc0); }
+
+.changelog-latest-tag {
+  padding: 1px 7px 2px;
+  border-radius: 999px;
+  background: rgba(246, 219, 192, .15);
+  color: var(--peach, #f6dbc0);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
+.changelog-release-lead { margin-top: 6px; }
+
+.changelog-section { margin-top: 20px; }
+.changelog-section:first-of-type { margin-top: 10px; }

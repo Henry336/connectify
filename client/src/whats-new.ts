@@ -1,6 +1,9 @@
-// Bump this when a release deserves its own "What's new" pass. The value is what gets
-// stored per device, so an older stored version is what brings the overlay back.
-export const CHANGELOG_VERSION = "2026.08.06";
+import { RELEASES } from "./changelog-data";
+
+// Adding a release to the front of RELEASES in changelog-data.ts is what brings this
+// overlay back -- CHANGELOG_VERSION just mirrors whatever the newest entry there is,
+// so there is one place to update, not two.
+export const CHANGELOG_VERSION = RELEASES[0].version;
 
 const SEEN_KEY = "connectify.changelogSeen";
 

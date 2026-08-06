@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, Headphones, Link2, ListMusic, Radio, Sparkles } from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { ArrowRight, Headphones, History, Link2, ListMusic, Radio, Sparkles } from "lucide-react";
 import { api, waitForBackend } from "./api";
 import { DEFAULT_IDENTITY, getIdentity, getRecentRooms, saveHostToken, saveIdentity, type Identity, type RecentRoom } from "./identity";
 import { Brand } from "./Brand";
 
+// Lazy so its stylesheet stays out of the prerender module graph, which runs in plain
+// Node and cannot load CSS -- same reason WhatsNew is lazy.
+const ChangelogHistory = lazy(() => import("./ChangelogHistory").then((module) => ({ default: module.ChangelogHistory })));
+
 export function Landing() {
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const [identity, setIdentity] = useState<Identity>(DEFAULT_IDENTITY);
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [name, setName] = useState(DEFAULT_IDENTITY.name);
@@ -50,8 +55,12 @@ export function Landing() {
   return <main className="landing">
     <nav className="landing-nav">
       <Brand />
-      <button className="text-button" onClick={() => { setMode("join"); document.querySelector(".room-card")?.scrollIntoView({ behavior: "smooth" }); }}>Join a room</button>
+      <div className="landing-nav-actions">
+        <button className="text-button" onClick={() => setChangelogOpen(true)}><History size={15} />What's new</button>
+        <button className="text-button" onClick={() => { setMode("join"); document.querySelector(".room-card")?.scrollIntoView({ behavior: "smooth" }); }}>Join a room</button>
+      </div>
     </nav>
+    {changelogOpen && <Suspense fallback={null}><ChangelogHistory onClose={() => setChangelogOpen(false)} /></Suspense>}
 
     <section className="hero">
       <div className="hero-copy">

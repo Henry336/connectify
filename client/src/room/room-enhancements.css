@@ -36,7 +36,9 @@
    laptop viewport: the search bar sat 97px below the fold before this pass, and
    reaching it required scrolling the whole page every time. */
 @media (min-width: 1121px) {
-  .video-stage { aspect-ratio: 16 / 6; }
+  /* Real YouTube video, not a squeezed banner. Standard 16:9 -- restoring this cost back
+     most of the space savings from the previous pass; see the note further down. */
+  .video-stage { aspect-ratio: 16 / 9; }
   .room-shell .listening-pane {
     padding-top: 14px;
     padding-bottom: 14px;

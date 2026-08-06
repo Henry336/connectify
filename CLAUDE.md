@@ -140,6 +140,33 @@ Never commit real values, and never paste a secret into a chat with an AI tool.
 Newest first. Add an entry whenever meaningful work lands: date, tool, what changed,
 current state.
 
+### 2026-08-06 (evening) — Claude Code (Opus 5/Sonnet 5)
+
+- **Room video player restored to true 16:9** (`client/src/room/room-enhancements.css`).
+  An earlier pass that day had shrunk it to `16/6` to make the search bar reachable
+  without scrolling on common laptop heights; that read as visibly squashed on real
+  video content, so it's back to a faithful ratio. The no-page-scroll shell from the
+  earlier pass is untouched and still correct — this just means the listening column
+  itself scrolls again on shorter screens to reach the search bar, which is expected
+  and was flagged as the likely tradeoff when the compression first went in.
+- **Changelog data centralized** into `client/src/changelog-data.ts` (`RELEASES`,
+  newest first). Both `WhatsNew.tsx` (the gated first-run overlay) and the new
+  `ChangelogHistory.tsx` (an on-demand reader, launched from a "What's new" button in
+  the landing page header) now read from this one array instead of each keeping its
+  own copy. `whats-new.ts`'s `CHANGELOG_VERSION` derives from `RELEASES[0].version`.
+  **Keep `RELEASES` capped at 3 entries** — when shipping a 4th release, add it to the
+  front and drop the oldest. The full permanent history stays in `CHANGELOG.md`;
+  `RELEASES` is deliberately just the rolling window the on-demand reader shows.
+  `ChangelogHistory` reuses FeatureModal (normal Escape/backdrop/close-button dismissal,
+  no scroll-gate — that gate is specific to the first-run overlay).
+
+**Verified in a real browser**, not just typechecked: the "What's new" button opens the
+reader, shows 1 release with 7 sections and a "Latest" tag, Escape and reopening both
+work cleanly (an initial synchronous DOM check after dispatching Escape read `true` — a
+measurement-timing artifact from checking before React flushed its state update, not a
+real bug; re-checking after a tick showed the modal gone). Video aspect ratio confirmed
+via computed style: 800px width now yields exactly 450px height (16:9).
+
 ### 2026-08-06 (later) — Claude Code (Opus 5)
 
 Added a user-facing changelog in two places, both written in plain language for listeners

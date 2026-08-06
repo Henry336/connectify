@@ -84,6 +84,9 @@ textarea { font: inherit; }
   border-color: var(--line);
   background: rgba(15, 10, 18, .92);
 }
+.landing-nav-actions { display: flex; align-items: center; gap: 22px; }
+.landing-nav-actions .text-button { display: inline-flex; align-items: center; gap: 6px; }
+.landing-nav-actions .text-button svg { width: 15px; opacity: .75; }
 .sync-pill {
   min-height: 36px;
   color: var(--peach);
