@@ -320,7 +320,10 @@ textarea { font: inherit; }
 .new-message-divider { color: var(--text-subtle); font-size: 10px; }
 .chat-reply-context strong { color: var(--mauve-bright); font-size: 10px; }
 .chat-reply-context span { font-size: 12px; }
-.chat-compose textarea { color: var(--ivory); font-size: 16px; }
+/* Matches the 14px message body, so what you type looks like what gets posted.
+   Touch devices keep 16px because iOS zooms the viewport on any smaller focused input. */
+.chat-compose textarea { color: var(--ivory); font-size: 14px; }
+@media (pointer: coarse) { .chat-compose textarea { font-size: 16px; } }
 /* Wall-clock time on each message, kept distinct from the song-moment jump button. */
 .chat-list header .chat-time { margin-left: 6px; color: var(--text-subtle); font-size: 10px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .chat-list header .reply-message { margin-left: auto; }
