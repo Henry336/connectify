@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { normalizeSongKey } from "./song-key.js";
 
 export const prisma = new PrismaClient({
   log: [{ emit: "event", level: "query" }],
@@ -335,7 +336,7 @@ export async function autoplayOutlook(code: string) {
   };
 }
 
-type InsertableItem = { providerId: string; title: string; artist: string; thumbnail: string | null; url: string };
+type InsertableItem = { providerId: string; title: string; artist: string; thumbnail: string | null; url: string; songKey?: string };
 type TrackCredit = { addedBy: string; addedByUserId: string; autoplayReason?: string };
 
 // Shared by DJ Autopilot suggestions and Connectify Library seeding: dedupes against
@@ -367,6 +368,7 @@ async function insertCreditedTracks(code: string, items: InsertableItem[], credi
           title: item.title,
           artist: item.artist,
           thumbnail: item.thumbnail,
+          songKey: item.songKey ?? normalizeSongKey(item.title),
           position: position++,
           ...credit,
         },
@@ -384,8 +386,29 @@ export function addAutoplayTracks(code: string, items: InsertableItem[], reason:
 
 // Inserts automated Connectify Library growth results the same way, credited separately
 // so they never show the "suggested for this room" tag real rooms use for Autopilot picks.
-export function addLibraryTracks(code: string, items: InsertableItem[]) {
-  return insertCreditedTracks(code, items, { addedBy: "Connectify Library", addedByUserId: "library-seed" });
+//
+// Also collapses re-uploads: providerId dedupe only catches the identical video, while a
+// search for one song routinely returns its official video, lyric video, audio-only cut,
+// and sped-up edit as four distinct videoIds. Keying on the normalized title keeps one.
+export async function addLibraryTracks(code: string, items: InsertableItem[]) {
+  if (!items.length) return [];
+  const room = await prisma.room.findUnique({ where: { code }, select: { id: true } });
+  if (!room) return [];
+  const keyed = items.map((item) => ({ ...item, songKey: normalizeSongKey(item.title) }));
+  const known = new Set(
+    (await prisma.track.findMany({
+      where: { roomId: room.id, songKey: { in: keyed.map((item) => item.songKey).filter(Boolean) } },
+      select: { songKey: true },
+    })).map((track) => track.songKey),
+  );
+  const unique: Array<InsertableItem & { songKey: string }> = [];
+  for (const item of keyed) {
+    // An unparseable title falls back to providerId-only dedupe rather than being dropped.
+    if (item.songKey && known.has(item.songKey)) continue;
+    if (item.songKey) known.add(item.songKey);
+    unique.push(item);
+  }
+  return insertCreditedTracks(code, unique, { addedBy: "Connectify Library", addedByUserId: "library-seed" });
 }
 
 const LIBRARY_ROOM_CODE = "LIBRAY";

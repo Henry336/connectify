@@ -74,6 +74,14 @@ Keep the Neon project in AWS Singapore when possible. Existing Render services s
 
 The reliability release adds the `RoomOperation` idempotency table and chat reply relation. Render’s existing build command already runs `npm run db:deploy`, so the checked-in migration is applied automatically before the updated server starts. Deploy the backend before or alongside the frontend; no new environment variables are required.
 
+### Keeping the free service awake
+
+Render's free plan spins a web service down after roughly 15 minutes without inbound HTTP traffic, and waking it costs the visitor a cold start of about a minute. `.github/workflows/keep-awake.yml` prevents that by pinging `/health` (deliberately database-free, so it never touches Neon) every 10 minutes from GitHub Actions—free and unlimited on public repositories, with no third-party uptime account needed.
+
+Set a repository **variable** (not a secret) named `RENDER_API_URL` to the service origin, e.g. `https://connectify-api.onrender.com`, under Settings → Secrets and variables → Actions → Variables. Without it the workflow logs a warning and no-ops.
+
+The schedule covers about 22 hours a day rather than all 24. Render's free plan includes 750 instance hours a month and a 31-day month is 744 hours, so a true 24/7 ping would sit about six hours away from the service being suspended for the rest of the month. The nightly gap keeps real headroom; widen the cron's hour range if you would rather trade that margin for full coverage. Note also that GitHub disables scheduled workflows in repositories with no activity for 60 days.
+
 The frontend calls `/ready` as soon as someone opens the landing page or a direct room link. This wakes Render and executes a minimal Neon query while the visitor is reading the page. A free Render web service can still require a cold start after inactivity; pre-warming moves that delay earlier but cannot guarantee an instant first request.
 
 ### Vercel frontend
@@ -114,9 +122,11 @@ A Google Cloud project's default quota is 10,000 units/day, and `search.list` co
 
 ### Automated Connectify Library growth
 
-Because Library contribution only happens when a real room searches, plays, and adds a song, the library otherwise grows only as fast as people use Connectify. An optional background job closes that gap: roughly every 20 hours it searches a rotating list of ~50 genres, decades, and moods, favoring whichever are least represented in the library so far, and adds new results (never anything already in the library) to a permanent, non-joinable system room. Contributions are credited to "Connectify Library," never mixed into a real host's queue, and logged with `{"type":"library_seed"}` in the server logs.
+Because Library contribution only happens when a real room searches, plays, and adds a song, the library otherwise grows only as fast as people use Connectify. An optional background job closes that gap: every hour it searches a small batch from a rotating catalog of ~150 genres, decades, regions, and moods, favoring whichever are least represented in the library so far, and adds new results (never anything already in the library) to a permanent, non-joinable system room. Each query is paged through over successive runs rather than re-fetching its first page, so a query keeps yielding new songs until YouTube runs out of results for it. Contributions are credited to "Connectify Library," never mixed into a real host's queue, and logged with `{"type":"library_seed"}` in the server logs.
 
-Set `YOUTUBE_SEED_API_KEY` to a **second** Google Cloud API key (same setup as above, in its own project so it carries its own 10,000-unit daily quota) to run this without ever touching the quota real users' live searches depend on. Without a second key it falls back to sharing `YOUTUBE_API_KEY`'s quota. `LIBRARY_SEED_DAILY_BUDGET` (default 30) caps how many `search.list` calls the job spends per run—30 calls is up to ~750 raw candidate songs before deduplication, well under either key's daily ceiling.
+Set `YOUTUBE_SEED_API_KEY` to a **second** Google Cloud API key (same setup as above, in its own Google Cloud **project** so it carries its own 10,000-unit daily quota) to run this without ever touching the quota real users' live searches depend on. Without a second key it falls back to sharing `YOUTUBE_API_KEY`'s quota. `LIBRARY_SEED_HOURLY_BUDGET` (default 5) caps `search.list` calls per hourly batch; 5/hour paces to roughly one project's full daily quota, or about **2,500 raw candidate songs a day** before deduplication. Hourly batches rather than one large daily pass keep the job restart-safe—a redeploy costs one small batch instead of a day's allowance.
+
+Note that 2,500 is *candidates fetched*, not net new library rows: results are deduplicated against everything already in the library, so the net daily gain naturally tapers as coverage grows. That is the intended behavior—the gap-fill ranking keeps steering the budget toward whichever styles are still thin.
 
 The PWA share target appears after installing Connectify from a compatible browser/OS. Share a YouTube link to Connectify, then choose one of the rooms previously visited on that device.
 
