@@ -110,6 +110,14 @@ Live search requests 25 embeddable results at a time and supports repeated **Loa
 
 To enable live search, create or select a Google Cloud project, enable **YouTube Data API v3**, create an API key, restrict it to that API, then save it as `YOUTUBE_API_KEY` in Render and redeploy. Restricting by server IP is only practical if your Render plan provides a stable outbound IP.
 
+A Google Cloud project's default quota is 10,000 units/day, and `search.list` costs 100 units, so `YOUTUBE_API_KEY` supports roughly 100 live-search requests a day—each returning up to 25 candidate songs, not 25 finished additions, since results still pass through room limits and duplicate checks before landing in a queue.
+
+### Automated Connectify Library growth
+
+Because Library contribution only happens when a real room searches, plays, and adds a song, the library otherwise grows only as fast as people use Connectify. An optional background job closes that gap: roughly every 20 hours it searches a rotating list of ~50 genres, decades, and moods, favoring whichever are least represented in the library so far, and adds new results (never anything already in the library) to a permanent, non-joinable system room. Contributions are credited to "Connectify Library," never mixed into a real host's queue, and logged with `{"type":"library_seed"}` in the server logs.
+
+Set `YOUTUBE_SEED_API_KEY` to a **second** Google Cloud API key (same setup as above, in its own project so it carries its own 10,000-unit daily quota) to run this without ever touching the quota real users' live searches depend on. Without a second key it falls back to sharing `YOUTUBE_API_KEY`'s quota. `LIBRARY_SEED_DAILY_BUDGET` (default 30) caps how many `search.list` calls the job spends per run—30 calls is up to ~750 raw candidate songs before deduplication, well under either key's daily ceiling.
+
 The PWA share target appears after installing Connectify from a compatible browser/OS. Share a YouTube link to Connectify, then choose one of the rooms previously visited on that device.
 
 ## Architecture

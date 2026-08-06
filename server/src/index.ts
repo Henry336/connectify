@@ -5,10 +5,11 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { addAutoplayTracks, advanceRoom, autoplayOutlook, createRoomCode, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, createRoomCode, ensureLibraryRoom, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
-import { fetchPlaylistItems, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
+import { fetchPlaylistItems, libraryCoverage, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
 import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
+import { pickSeedQueries, SEED_QUERIES } from "./library-seed.js";
 import { getPlaylistId, isMixPlaylist, resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -410,6 +411,53 @@ const operationCleanupTimer = setInterval(() => {
   }).catch((error) => console.error("Operation receipt cleanup failed:", error));
 }, 6 * 60 * 60 * 1000);
 operationCleanupTimer.unref();
+
+// Grows the Connectify Library on its own so it doesn't depend on manually adding songs.
+// Uses a dedicated key so it never competes with real users' live search quota; falls back
+// to the shared key (sharing that budget) if no dedicated key is configured. Runs at most
+// once roughly every 20 hours, tracked via the newest LibrarySeed.lastSearchedAt rather
+// than a fixed clock, so it self-corrects across restarts and cold starts.
+const LIBRARY_SEED_BUDGET = Number(process.env.LIBRARY_SEED_DAILY_BUDGET || 30);
+const LIBRARY_SEED_MIN_INTERVAL_MS = 20 * 60 * 60 * 1000;
+async function runLibrarySeedJob() {
+  const seedKey = process.env.YOUTUBE_SEED_API_KEY || process.env.YOUTUBE_API_KEY;
+  if (!seedKey || LIBRARY_SEED_BUDGET <= 0) return;
+  try {
+    const lastRun = await prisma.librarySeed.aggregate({ _max: { lastSearchedAt: true } });
+    if (lastRun._max.lastSearchedAt && Date.now() - lastRun._max.lastSearchedAt.getTime() < LIBRARY_SEED_MIN_INTERVAL_MS) return;
+
+    const room = await ensureLibraryRoom();
+    const queries = [...SEED_QUERIES];
+    const [coverage, seedRows] = await Promise.all([
+      libraryCoverage(queries),
+      prisma.librarySeed.findMany({ where: { query: { in: queries } } }),
+    ]);
+    const seedByQuery = new Map(seedRows.map((row) => [row.query, row]));
+    const candidates = queries.map((query) => ({ query, coverage: coverage[query] ?? 0, lastSearchedAt: seedByQuery.get(query)?.lastSearchedAt ?? null }));
+    const chosen = pickSeedQueries(candidates, LIBRARY_SEED_BUDGET);
+
+    let added = 0;
+    for (const query of chosen) {
+      try {
+        const result = await searchYouTube(query, undefined, seedKey);
+        const created = await addLibraryTracks(room.code, result.items.map((item) => ({ providerId: item.providerId, title: item.title, artist: item.artist, thumbnail: item.thumbnail, url: item.url })));
+        added += created.length;
+      } catch (error: any) {
+        console.warn("Library seed search failed:", query, error?.status || error?.message || error);
+        // Quota exhausted for the day: stop early rather than failing through every query.
+        if (error?.status === 403 || error?.status === 429) break;
+      } finally {
+        await prisma.librarySeed.upsert({ where: { query }, create: { query, lastSearchedAt: new Date() }, update: { lastSearchedAt: new Date() } });
+      }
+    }
+    console.log(JSON.stringify({ type: "library_seed", queriesRun: chosen.length, tracksAdded: added }));
+  } catch (error) {
+    console.error("Library seed job failed:", error);
+  }
+}
+const librarySeedTimer = setInterval(() => void runLibrarySeedJob(), 60 * 60 * 1000);
+librarySeedTimer.unref();
+void runLibrarySeedJob();
 
 // Per-room standby pool of Smart Discovery candidates, refreshed at most every 30 minutes.
 // Backed by the shared search cache, so repeated refills rarely spend YouTube quota.
