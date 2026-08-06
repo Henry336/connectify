@@ -333,6 +333,20 @@ textarea { font: inherit; }
 .chat-status button { min-height: 0; padding: 1px 6px; border: 0; border-radius: 5px; color: var(--mauve-bright); background: rgba(139, 92, 246, .14); font-size: 10px; }
 .chat-list article.is-sending > div { opacity: .72; }
 
+/* The rest of the chat type. The legacy stylesheet left these between 7px and 9px,
+   which is unreadable next to the 14px message body. Same bug as the composer. */
+.chat-empty strong { font-size: 14px; }
+.chat-empty span { font-size: 12px; line-height: 1.5; }
+.chat-compose label { font-size: 12px; }
+.chat-date,
+.new-message-divider { font-size: 10px; }
+.spoiler-message { font-size: 12px; }
+.load-older-chat { min-height: 34px; font-size: 12px; }
+.jump-latest-chat { min-height: 34px; font-size: 12px; }
+.replying-to strong { font-size: 11px; }
+.replying-to small { font-size: 11px; }
+.chat-compose .mention-suggestions button { height: 30px; font-size: 12px; }
+
 /* Menus stay above Queue and Chat */
 .menu-wrap { position: relative; }
 .action-menu {
