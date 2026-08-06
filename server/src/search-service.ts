@@ -27,18 +27,22 @@ const asSearchItem = (track: { providerId: string; title: string; artist: string
 
 // How many public Library tracks already match each candidate seed query, so the growth
 // job can prioritize genres/moods that are thin over ones already well covered.
+//
+// Deliberately sequential: this runs on a free-tier Postgres pool inside a 512 MB
+// container, and fanning the whole seed catalog out through Promise.all exhausted
+// connections and took the process down. Callers must pass a shortlist, not the catalog.
 export async function libraryCoverage(queries: string[]): Promise<Record<string, number>> {
-  const counts = await Promise.all(queries.map(async (query) => {
-    const count = await prisma.track.count({
+  const counts: Record<string, number> = {};
+  for (const query of queries) {
+    counts[query] = await prisma.track.count({
       where: {
         removedAt: null,
         room: { discoverable: true },
         OR: [{ title: { contains: query, mode: Prisma.QueryMode.insensitive } }, { artist: { contains: query, mode: Prisma.QueryMode.insensitive } }],
       },
     });
-    return [query, count] as const;
-  }));
-  return Object.fromEntries(counts);
+  }
+  return counts;
 }
 
 export async function searchConnectifyLibrary(rawQuery: string, roomCode: string) {

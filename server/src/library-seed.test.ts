@@ -1,6 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pickSeedTargets } from "./library-seed.js";
+import { pickSeedTargets, preselectByRotation, SEED_QUERIES } from "./library-seed.js";
+
+test("rotation shortlist keeps the coverage count off the whole catalog", () => {
+  // Guards the free-tier crash: coverage must never be counted for all ~150 queries.
+  const entries = SEED_QUERIES.map((query) => ({ query, lastSearchedAt: new Date("2026-01-01") }));
+  assert.equal(preselectByRotation(entries, 15).length, 15);
+  assert.ok(SEED_QUERIES.length > 100, "catalog should stay large enough for the shortlist to matter");
+});
+
+test("rotation puts never-searched queries first, then the stalest", () => {
+  const entries = [
+    { query: "recent", lastSearchedAt: new Date("2026-02-01") },
+    { query: "never", lastSearchedAt: null },
+    { query: "stale", lastSearchedAt: new Date("2026-01-01") },
+  ];
+  assert.deepEqual(preselectByRotation(entries, 3), ["never", "stale", "recent"]);
+});
+
+test("rotation skips exhausted queries and handles an empty shortlist", () => {
+  const entries = [{ query: "done", lastSearchedAt: null, exhausted: true }, { query: "live", lastSearchedAt: null }];
+  assert.deepEqual(preselectByRotation(entries, 5), ["live"]);
+  assert.deepEqual(preselectByRotation(entries, 0), []);
+});
 
 test("never-searched queries are prioritized over anything already run", () => {
   const candidates = [

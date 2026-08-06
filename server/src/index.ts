@@ -9,7 +9,7 @@ import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, crea
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { fetchPlaylistItems, libraryCoverage, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
 import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
-import { pickSeedTargets, SEED_QUERIES } from "./library-seed.js";
+import { pickSeedTargets, preselectByRotation, SEED_QUERIES } from "./library-seed.js";
 import { getPlaylistId, isMixPlaylist, resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -429,13 +429,25 @@ async function runLibrarySeedBatch() {
   try {
     const room = await ensureLibraryRoom();
     const queries = [...SEED_QUERIES];
-    const [coverage, seedRows] = await Promise.all([
-      libraryCoverage(queries),
-      prisma.librarySeed.findMany({ where: { query: { in: queries } } }),
-    ]);
+    const seedRows = await prisma.librarySeed.findMany({ where: { query: { in: queries } } });
     const seedByQuery = new Map(seedRows.map((row) => [row.query, row]));
-    const chosen = pickSeedTargets(
+
+    // Two passes on purpose. Rotation narrows the whole catalog to a shortlist using data
+    // already in hand, then coverage is counted only for those few. Counting coverage
+    // across the entire catalog meant ~150 database round trips per batch, which is what
+    // took the container down on the free tier.
+    const shortlist = preselectByRotation(
       queries.map((query) => ({
+        query,
+        lastSearchedAt: seedByQuery.get(query)?.lastSearchedAt ?? null,
+        exhausted: seedByQuery.get(query)?.exhausted ?? false,
+      })),
+      LIBRARY_SEED_HOURLY_BUDGET * 3,
+    );
+    if (!shortlist.length) return;
+    const coverage = await libraryCoverage(shortlist);
+    const chosen = pickSeedTargets(
+      shortlist.map((query) => ({
         query,
         coverage: coverage[query] ?? 0,
         lastSearchedAt: seedByQuery.get(query)?.lastSearchedAt ?? null,

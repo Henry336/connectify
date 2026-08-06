@@ -47,6 +47,27 @@ export type SeedCandidate = {
   exhausted?: boolean;
 };
 
+export type SeedRotationEntry = { query: string; lastSearchedAt: Date | string | null; exhausted?: boolean };
+
+/**
+ * First pass: narrow the whole catalog to a shortlist using only data we already hold,
+ * so the expensive per-query coverage count runs over a handful of rows instead of all
+ * ~150. Never-searched queries lead, then the least recently searched.
+ */
+export function preselectByRotation(entries: SeedRotationEntry[], shortlist: number): string[] {
+  if (shortlist <= 0) return [];
+  return entries
+    .filter((entry) => !entry.exhausted)
+    .sort((a, b) => {
+      const aNever = a.lastSearchedAt === null;
+      const bNever = b.lastSearchedAt === null;
+      if (aNever !== bNever) return aNever ? -1 : 1;
+      return new Date(a.lastSearchedAt || 0).getTime() - new Date(b.lastSearchedAt || 0).getTime();
+    })
+    .slice(0, shortlist)
+    .map((entry) => entry.query);
+}
+
 // Chooses which seed queries to run next: never-searched queries come first, then the
 // ones with the fewest existing Library matches, with staleness as the tiebreak. Queries
 // YouTube has no more pages for are skipped entirely. This is what keeps a fixed budget
