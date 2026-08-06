@@ -9,7 +9,7 @@ import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, crea
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { fetchPlaylistItems, libraryCoverage, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
 import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
-import { pickSeedQueries, SEED_QUERIES } from "./library-seed.js";
+import { pickSeedTargets, SEED_QUERIES } from "./library-seed.js";
 import { getPlaylistId, isMixPlaylist, resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
@@ -413,19 +413,20 @@ const operationCleanupTimer = setInterval(() => {
 operationCleanupTimer.unref();
 
 // Grows the Connectify Library on its own so it doesn't depend on manually adding songs.
-// Uses a dedicated key so it never competes with real users' live search quota; falls back
-// to the shared key (sharing that budget) if no dedicated key is configured. Runs at most
-// once roughly every 20 hours, tracked via the newest LibrarySeed.lastSearchedAt rather
-// than a fixed clock, so it self-corrects across restarts and cold starts.
-const LIBRARY_SEED_BUDGET = Number(process.env.LIBRARY_SEED_DAILY_BUDGET || 30);
-const LIBRARY_SEED_MIN_INTERVAL_MS = 20 * 60 * 60 * 1000;
-async function runLibrarySeedJob() {
+// Uses a dedicated key so it never competes with real users' live-search quota; falls back
+// to the shared key (sharing that budget) if no dedicated key is configured.
+//
+// Runs a small batch every hour rather than one big daily pass: a Google Cloud project
+// allows 10,000 quota units/day and search.list costs 100, so ~100 calls/day is the
+// ceiling. At the default 5 calls/hour the job paces itself to roughly that ceiling
+// (~2,500 raw candidate songs/day before dedupe) while staying restart-safe — an
+// unlucky redeploy costs one small batch instead of a whole day's allowance. If the
+// quota does run out, YouTube answers 403/429 and the batch stops early on its own.
+const LIBRARY_SEED_HOURLY_BUDGET = Number(process.env.LIBRARY_SEED_HOURLY_BUDGET || 5);
+async function runLibrarySeedBatch() {
   const seedKey = process.env.YOUTUBE_SEED_API_KEY || process.env.YOUTUBE_API_KEY;
-  if (!seedKey || LIBRARY_SEED_BUDGET <= 0) return;
+  if (!seedKey || LIBRARY_SEED_HOURLY_BUDGET <= 0) return;
   try {
-    const lastRun = await prisma.librarySeed.aggregate({ _max: { lastSearchedAt: true } });
-    if (lastRun._max.lastSearchedAt && Date.now() - lastRun._max.lastSearchedAt.getTime() < LIBRARY_SEED_MIN_INTERVAL_MS) return;
-
     const room = await ensureLibraryRoom();
     const queries = [...SEED_QUERIES];
     const [coverage, seedRows] = await Promise.all([
@@ -433,31 +434,48 @@ async function runLibrarySeedJob() {
       prisma.librarySeed.findMany({ where: { query: { in: queries } } }),
     ]);
     const seedByQuery = new Map(seedRows.map((row) => [row.query, row]));
-    const candidates = queries.map((query) => ({ query, coverage: coverage[query] ?? 0, lastSearchedAt: seedByQuery.get(query)?.lastSearchedAt ?? null }));
-    const chosen = pickSeedQueries(candidates, LIBRARY_SEED_BUDGET);
+    const chosen = pickSeedTargets(
+      queries.map((query) => ({
+        query,
+        coverage: coverage[query] ?? 0,
+        lastSearchedAt: seedByQuery.get(query)?.lastSearchedAt ?? null,
+        exhausted: seedByQuery.get(query)?.exhausted ?? false,
+      })),
+      LIBRARY_SEED_HOURLY_BUDGET,
+    );
 
     let added = 0;
+    let calls = 0;
     for (const query of chosen) {
+      const seed = seedByQuery.get(query);
       try {
-        const result = await searchYouTube(query, undefined, seedKey);
+        // Continue deeper into this query's result pages instead of re-fetching page one,
+        // so a query keeps producing new songs across runs rather than cache-hitting itself.
+        const result = await searchYouTube(query, seed?.pageToken ?? undefined, seedKey);
+        calls += 1;
         const created = await addLibraryTracks(room.code, result.items.map((item) => ({ providerId: item.providerId, title: item.title, artist: item.artist, thumbnail: item.thumbnail, url: item.url })));
         added += created.length;
+        await prisma.librarySeed.upsert({
+          where: { query },
+          create: { query, lastSearchedAt: new Date(), pageToken: result.nextPageToken, pagesFetched: 1, exhausted: !result.nextPageToken },
+          // No next page means this query is mined out; park it so the picker skips it.
+          update: { lastSearchedAt: new Date(), pageToken: result.nextPageToken, pagesFetched: { increment: 1 }, exhausted: !result.nextPageToken },
+        });
       } catch (error: any) {
         console.warn("Library seed search failed:", query, error?.status || error?.message || error);
-        // Quota exhausted for the day: stop early rather than failing through every query.
-        if (error?.status === 403 || error?.status === 429) break;
-      } finally {
         await prisma.librarySeed.upsert({ where: { query }, create: { query, lastSearchedAt: new Date() }, update: { lastSearchedAt: new Date() } });
+        if (error?.status === 403 || error?.status === 429) break;
       }
     }
-    console.log(JSON.stringify({ type: "library_seed", queriesRun: chosen.length, tracksAdded: added }));
+    if (calls) console.log(JSON.stringify({ type: "library_seed", queriesRun: calls, tracksAdded: added }));
   } catch (error) {
-    console.error("Library seed job failed:", error);
+    console.error("Library seed batch failed:", error);
   }
 }
-const librarySeedTimer = setInterval(() => void runLibrarySeedJob(), 60 * 60 * 1000);
+const librarySeedTimer = setInterval(() => void runLibrarySeedBatch(), 60 * 60 * 1000);
 librarySeedTimer.unref();
-void runLibrarySeedJob();
+// Give the process a moment to finish booting and serving traffic before the first batch.
+setTimeout(() => void runLibrarySeedBatch(), 30_000).unref();
 
 // Per-room standby pool of Smart Discovery candidates, refreshed at most every 30 minutes.
 // Backed by the shared search cache, so repeated refills rarely spend YouTube quota.

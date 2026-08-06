@@ -19,7 +19,7 @@ model Room {
   startedAt        DateTime?
   autopilotEnabled Boolean  @default(true)
   autoplayMinBuffer Int     @default(4)
-  autoplayFreshness Int     @default(30)
+  autoplayFreshness Int     @default(80)
   partyMode        String   @default("standard")
   theme            String   @default("violet")
   isLocked         Boolean  @default(false)
@@ -166,6 +166,9 @@ model RoomActivity {
 model LibrarySeed {
   query          String    @id
   lastSearchedAt DateTime?
+  pageToken      String?
+  pagesFetched   Int       @default(0)
+  exhausted      Boolean   @default(false)
 }
 
 model SearchCache {
