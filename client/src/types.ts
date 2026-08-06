@@ -14,6 +14,8 @@ export type Track = {
   playedAt: string | null;
   removedAt: string | null;
   playNext: boolean;
+  autoplayBlocked?: boolean;
+  autoplayReason?: string | null;
   pending?: boolean;
 };
 
@@ -80,6 +82,7 @@ export type Room = {
   startedAt: string | null;
   autopilotEnabled: boolean;
   autoplayMinBuffer: number;
+  autoplayFreshness: number;
   partyMode: PartyMode;
   theme: RoomTheme;
   isLocked: boolean;

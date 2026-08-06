@@ -50,6 +50,32 @@ const touchMemory = (key: string, value: YouTubeSearchResponse) => {
 };
 const decodeTitle = (value: string) => value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 
+export type PlaylistImportItem = { providerId: string; title: string; artist: string; thumbnail: string | null; url: string };
+
+export function mapPlaylistItems(data: any): PlaylistImportItem[] {
+  return ((Array.isArray(data?.items) ? data.items : []) as any[])
+    .map((item) => ({
+      providerId: String(item?.contentDetails?.videoId || item?.snippet?.resourceId?.videoId || ""),
+      title: String(item?.snippet?.title || ""),
+      artist: String(item?.snippet?.videoOwnerChannelTitle || item?.snippet?.channelTitle || "YouTube"),
+      thumbnail: item?.snippet?.thumbnails?.medium?.url || item?.snippet?.thumbnails?.default?.url || null,
+    }))
+    .filter((item) => /^[A-Za-z0-9_-]{11}$/.test(item.providerId) && item.title && !["Deleted video", "Private video"].includes(item.title))
+    .map((item) => ({ ...item, title: decodeTitle(item.title), artist: decodeTitle(item.artist), url: `https://www.youtube.com/watch?v=${item.providerId}` }));
+}
+
+// One playlistItems.list page (≤50 videos, 1 quota unit). Callers gate on YOUTUBE_API_KEY.
+export async function fetchPlaylistItems(playlistId: string): Promise<PlaylistImportItem[]> {
+  const params = new URLSearchParams({ key: process.env.YOUTUBE_API_KEY!, part: "snippet,contentDetails", playlistId, maxResults: "50" });
+  const response = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) {
+    const error: any = new Error("YouTube playlist lookup failed.");
+    error.status = response.status;
+    throw error;
+  }
+  return mapPlaylistItems(await response.json());
+}
+
 export async function searchYouTube(rawQuery: string, pageToken?: string): Promise<YouTubeSearchResponse> {
   const query = normalizeSearchQuery(rawQuery);
   const key = cacheKey(query, pageToken);

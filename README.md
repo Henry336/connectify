@@ -7,6 +7,11 @@ Connectify is a shared listening room: create a room, paste a YouTube URL, and e
 - Shareable six-character listening rooms
 - YouTube URL parsing and metadata lookup (no YouTube API key required)
 - Hybrid search: instant opt-in Connectify Library results plus paginated live YouTube search
+- YouTube playlist import (up to 50 songs per paste; requires the live-search API key)
+- Smart Autoplay: room-history revival blended with clearly labeled fresh suggestions via a host-controlled Familiar↔Fresh setting, degrading to history-only without an API key
+- Recent searches, quick re-add of recently added songs, and already-queued markers in search results
+- Keyboard shortcuts with a "?" help panel, per-device queue/chat tab memory, and focus-preserving composers
+- Read-only offline room browsing from a saved copy, a non-blocking reconnect notice, and reduced-data behavior on Data Saver connections
 - Two-level YouTube result cache (bounded in-memory LRU plus PostgreSQL) and concurrent-request deduplication
 - Installable PWA share target for sending YouTube links directly into recent rooms on supported devices
 - Synchronized play, pause, seek, skip, and track selection

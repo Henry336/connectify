@@ -63,10 +63,13 @@ export function ChatMessageRow({ message, previous, firstUnreadId, canControl, t
   </Fragment>;
 }
 
-export function SearchResult({ item, canControl, adding, onAdd }: { item: SearchItem; canControl: boolean; adding: boolean; onAdd: (url: string, placement?: "last" | "next", metadata?: SearchItem) => Promise<void> }) {
-  return <article className="search-result">
-    <img src={item.thumbnail || "/connectify.svg"} alt="" loading="lazy" />
-    <div><strong>{item.title}</strong><span>{item.artist}</span><small>{item.source === "connectify" ? "Connectify Library" : "YouTube"}</small></div>
-    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)} title="Add through the normal fair queue"><Plus />{adding ? "Adding…" : "Add to queue"}</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)} title="Play immediately after the current video"><ListPlus />Play next</button>}</div>
+// Data Saver connections skip search thumbnails and next-track preloading.
+export const saveData = typeof navigator !== "undefined" && (navigator as any).connection?.saveData === true;
+
+export function SearchResult({ item, canControl, adding, queued, onAdd }: { item: SearchItem; canControl: boolean; adding: boolean; queued?: boolean; onAdd: (url: string, placement?: "last" | "next", metadata?: SearchItem) => Promise<void> }) {
+  return <article className={`search-result ${queued ? "queued" : ""}`}>
+    {saveData ? <i className="thumb-placeholder" aria-hidden="true" /> : <img src={item.thumbnail || "/connectify.svg"} alt="" loading="lazy" />}
+    <div><strong>{item.title}</strong><span>{item.artist}</span><small>{queued ? "Already in the queue" : item.source === "connectify" ? "Connectify Library" : "YouTube"}</small></div>
+    <div className="search-result-actions"><button disabled={adding || queued} onClick={() => void onAdd(item.url, "last", item)} title={queued ? "This song is already queued" : "Add through the normal fair queue"}><Plus />{adding ? "Adding…" : queued ? "In queue" : "Add to queue"}</button>{canControl && !queued && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)} title="Play immediately after the current video"><ListPlus />Play next</button>}</div>
   </article>;
 }

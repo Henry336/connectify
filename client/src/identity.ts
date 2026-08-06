@@ -67,3 +67,41 @@ export function rememberRoom(code: string, name: string) {
     ...rooms,
   ]));
 }
+
+export function getRecentSearches(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem("connectify.recentSearches") || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 8) : [];
+  }
+  catch { return []; }
+}
+
+export function rememberSearch(query: string) {
+  if (typeof window === "undefined") return;
+  const trimmed = query.trim();
+  if (!trimmed) return;
+  const next = [trimmed, ...getRecentSearches().filter((item) => item.toLowerCase() !== trimmed.toLowerCase())].slice(0, 8);
+  try { localStorage.setItem("connectify.recentSearches", JSON.stringify(next)); }
+  catch { /* Recent searches are best-effort. */ }
+}
+
+export type RecentAdd = { providerId: string; title: string; artist: string; thumbnail: string | null; url: string; duration: number | null };
+
+export function getRecentAdds(): RecentAdd[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem("connectify.recentAdds") || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is RecentAdd => Boolean(item && typeof item.providerId === "string" && typeof item.title === "string" && typeof item.url === "string")).slice(0, 6)
+      : [];
+  }
+  catch { return []; }
+}
+
+export function rememberRecentAdd(item: RecentAdd) {
+  if (typeof window === "undefined") return;
+  const next = [item, ...getRecentAdds().filter((existing) => existing.providerId !== item.providerId)].slice(0, 6);
+  try { localStorage.setItem("connectify.recentAdds", JSON.stringify(next)); }
+  catch { /* Recently added tracks are best-effort. */ }
+}

@@ -5,10 +5,11 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { addAutoplayTracks, advanceRoom, autoplayOutlook, createRoomCode, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
-import { searchConnectifyLibrary, searchYouTube } from "./search-service.js";
-import { resolveTrack } from "./youtube.js";
+import { fetchPlaylistItems, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
+import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
+import { getPlaylistId, isMixPlaylist, resolveTrack } from "./youtube.js";
 
 const port = Number(process.env.PORT || 3001);
 const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:5173").split(",").map((value) => value.trim());
@@ -228,6 +229,89 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
   }
 }));
 
+app.post("/api/rooms/:code/playlist", asyncRoute(async (req, res) => {
+  const input = z.object({
+    url: z.string().url(),
+    addedBy: z.string().trim().min(1).max(40),
+    userId: z.string().min(8).max(80),
+    operationId: operationIdSchema.default(() => randomUUID()),
+    hostToken: z.string().max(200).optional(),
+  }).parse(req.body);
+  const code = String(req.params.code).toUpperCase();
+  const playlistId = getPlaylistId(input.url);
+  if (!playlistId) return res.status(400).json({ error: "Paste a YouTube playlist link (it contains list=…)." });
+  if (isMixPlaylist(playlistId)) return res.status(400).json({ error: "YouTube Mixes are generated per viewer and cannot be imported. Save the songs to a regular playlist first." });
+  if (!process.env.YOUTUBE_API_KEY) return res.status(503).json({ error: "Playlist import needs live search to be configured.", code: "SEARCH_UNAVAILABLE" });
+  const room = await prisma.room.findUnique({ where: { code } });
+  if (!room) return res.status(404).json({ error: "Room not found." });
+  const isHost = Boolean(input.hostToken && room.hostTokenHash === hashToken(input.hostToken));
+  const [member, activeTrackCount, pendingByUser, existingTracks, maxPosition, currentFreshTrack] = await Promise.all([
+    prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId: input.userId } } }),
+    prisma.track.count({ where: { roomId: room.id, removedAt: null, playedAt: null } }),
+    isHost ? Promise.resolve(0) : prisma.track.count({ where: { roomId: room.id, addedByUserId: input.userId, playedAt: null, removedAt: null, ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}) } }),
+    prisma.track.findMany({ where: { roomId: room.id, removedAt: null, playedAt: null }, select: { providerId: true, artist: true } }),
+    prisma.track.aggregate({ where: { roomId: room.id, removedAt: null }, _max: { position: true } }),
+    room.currentTrackId ? prisma.track.findFirst({ where: { id: room.currentTrackId, removedAt: null, playedAt: null }, select: { id: true } }) : Promise.resolve(null),
+  ]);
+  const denial = addTrackDenial({ isLocked: room.isLocked, isReturning: Boolean(member), isHost, isBanned: Boolean(member?.isBanned), guestsCanAdd: room.guestsCanAdd, pending: pendingByUser, limit: room.maxSongsPerUser });
+  if (denial) return res.status(403).json({ error: denial });
+  // Imports respect the same ceilings as one-by-one adds: the 100-item queue and,
+  // for guests, their per-user allowance.
+  const allowance = Math.min(100 - activeTrackCount, isHost ? 100 : Math.max(0, room.maxSongsPerUser - pendingByUser));
+  if (allowance <= 0) return res.status(409).json({ error: "This queue is full." });
+  const operation = await claimOperation(room.id, input.userId, "playlist:import", input.operationId);
+  if (!operation.fresh) {
+    if (operation.result) return res.status(200).json(operation.result);
+    return res.status(202).json({ pending: true, operationId: input.operationId });
+  }
+  try {
+    const items = await fetchPlaylistItems(playlistId);
+    const queued = new Set(existingTracks.map((track) => track.providerId));
+    const artists = existingTracks.map((track) => track.artist);
+    const importable: typeof items = [];
+    for (const item of items) {
+      if (importable.length >= allowance) break;
+      if (queued.has(item.providerId)) continue;
+      if (!artistAllowed(room.partyMode, [...artists, ...importable.map((chosen) => chosen.artist)], item.artist)) continue;
+      queued.add(item.providerId);
+      importable.push(item);
+    }
+    if (!importable.length) {
+      await abandonOperation(input.operationId);
+      return res.status(409).json({ error: items.length ? "Every playable song in that playlist is already in the queue." : "That playlist has no playable videos." });
+    }
+    let position = (maxPosition._max.position ?? -1) + 1;
+    const created = await prisma.$transaction(async (tx) => {
+      const rows = [];
+      for (const item of importable) {
+        rows.push(await tx.track.create({ data: { roomId: room.id, url: item.url, provider: "youtube", providerId: item.providerId, title: item.title, artist: item.artist, thumbnail: item.thumbnail, addedBy: input.addedBy, addedByUserId: input.userId, position: position++ } }));
+      }
+      await tx.room.update({
+        where: { id: room.id },
+        data: {
+          ...(currentFreshTrack ? {} : { currentTrackId: rows[0].id, isPlaying: false, playbackPosition: 0, startedAt: null }),
+          revision: { increment: 1 },
+        },
+      });
+      return rows;
+    });
+    const result = { added: created.length, skipped: items.length - created.length, tracks: created };
+    await completeOperation(input.operationId, result);
+    res.status(201).json(result);
+    void emitQueueState(room.code).then(() => scheduleRoomEnd(room.code)).catch((error) => console.error("Queue broadcast failed:", error));
+    void (async () => {
+      const event = await prisma.roomActivity.create({ data: { roomId: room.id, actorId: input.userId, actorName: input.addedBy, action: "imported_playlist", target: String(created.length) } });
+      io.to(room.code).emit("room:activity", event);
+      io.to(room.code).emit("room:event", { id: event.id, actorId: event.actorId, actorName: event.actorName, action: event.action, target: event.target, createdAt: event.createdAt });
+    })().catch((error) => console.error("Playlist activity failed:", error));
+  } catch (error: any) {
+    await abandonOperation(input.operationId);
+    if (error?.status === 403 || error?.status === 429) return res.status(503).json({ error: "YouTube playlist import is temporarily unavailable. You can still paste individual URLs.", code: "SEARCH_QUOTA" });
+    if (error?.status === 404) return res.status(404).json({ error: "That playlist is private or unavailable." });
+    throw error;
+  }
+}));
+
 type PresencePerson = { id: string; userId: string; name: string; avatar: string; role: "host" | "guest" };
 const presence = new Map<string, Map<string, PresencePerson>>();
 const joinReservations = new Map<string, Set<string>>();
@@ -327,26 +411,56 @@ const operationCleanupTimer = setInterval(() => {
 }, 6 * 60 * 60 * 1000);
 operationCleanupTimer.unref();
 
+// Per-room standby pool of Smart Discovery candidates, refreshed at most every 30 minutes.
+// Backed by the shared search cache, so repeated refills rarely spend YouTube quota.
+const discoveryPools = new Map<string, { expiresAt: number; seed: string; items: SearchItem[] }>();
+async function discoveryPool(code: string, seeds: string[]) {
+  if (!process.env.YOUTUBE_API_KEY || !seeds.length) return null;
+  const cached = discoveryPools.get(code);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  try {
+    const seed = seeds[Math.floor(Math.random() * seeds.length)];
+    const result = await searchYouTube(`${seed} songs`);
+    const pool = { expiresAt: Date.now() + 30 * 60_000, seed, items: result.items };
+    discoveryPools.set(code, pool);
+    return pool;
+  } catch (error) {
+    console.warn("Discovery search unavailable:", error);
+    return null;
+  }
+}
+
+async function recordAutopilotActivity(code: string, roomId: string, action: string, count: number, titles: string[]) {
+  const event = await prisma.roomActivity.create({
+    data: { roomId, actorId: "autopilot", actorName: "DJ Autopilot", action, target: String(count), detail: { titles } as any },
+  });
+  io.to(code).emit("room:activity", event);
+}
+
 // Fire-and-forget: keep a Smart Autoplay buffer of upcoming songs without ever blocking
-// an Add, playback change, queue mutation, or join. Only recycles existing room history.
+// an Add, playback change, queue mutation, or join. Fresh Smart Discovery suggestions are
+// blended by the room's Familiar↔Fresh setting; familiar revivals cover the remainder and
+// the whole thing degrades to history-only when the key, quota, or pool is unavailable.
 async function runAutoplayRefill(code: string) {
   try {
+    let suggested: Array<{ roomId: string; title: string }> = [];
+    const outlook = await autoplayOutlook(code);
+    if (outlook && outlook.need > 0 && outlook.freshness > 0) {
+      const pool = await discoveryPool(code, topArtists(outlook.historySignals));
+      if (pool) {
+        const { fresh } = splitAutoplay(outlook.need, outlook.freshness, pool.items.length > 0);
+        const picks = pickDiscovery(pool.items, outlook.excludeProviderIds, fresh, outlook.upcomingArtists);
+        if (picks.length) suggested = await addAutoplayTracks(code, picks, `Because this room played ${pool.seed}`);
+      }
+    }
     const revived = await refillAutoplay(code);
-    if (!revived?.length) return;
+    if (!suggested.length && !revived?.length) return;
     await emitQueueState(code);
     await scheduleRoomEnd(code);
-    const roomId = revived[0].roomId;
-    const event = await prisma.roomActivity.create({
-      data: {
-        roomId,
-        actorId: "autopilot",
-        actorName: "DJ Autopilot",
-        action: "autoplay_revived",
-        target: String(revived.length),
-        detail: { titles: revived.slice(0, 3).map((track) => track.title) } as any,
-      },
-    });
-    io.to(code).emit("room:activity", event);
+    const roomId = suggested[0]?.roomId || revived?.[0]?.roomId;
+    if (!roomId) return;
+    if (revived?.length) await recordAutopilotActivity(code, roomId, "autoplay_revived", revived.length, revived.slice(0, 3).map((track) => track.title));
+    if (suggested.length) await recordAutopilotActivity(code, roomId, "autoplay_suggested", suggested.length, suggested.slice(0, 3).map((track) => track.title));
   } catch (error) {
     console.error("Autoplay refill failed:", error);
   }
@@ -798,6 +912,7 @@ io.on("connection", (socket) => {
     const parsed = z.object({
       autopilotEnabled: z.boolean().optional(), partyMode: partyModeSchema.optional(), theme: themeSchema.optional(),
       autoplayMinBuffer: z.number().int().min(1).max(10).optional(),
+      autoplayFreshness: z.number().int().min(0).max(100).optional(),
       isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(),
       maxSongsPerUser: z.number().int().min(1).max(20).optional(),
       maxParticipants: z.number().int().min(2).max(100).optional(),
@@ -813,7 +928,7 @@ io.on("connection", (socket) => {
       }
     }
     reply({ ok: true });
-    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, autoplayMinBuffer: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, maxParticipants: true, chatSlowMode: true, discoverable: true } });
+    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, autoplayMinBuffer: true, autoplayFreshness: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, maxParticipants: true, chatSlowMode: true, discoverable: true } });
     io.to(code).emit("room:settings-patch", { ...state, serverTime: new Date().toISOString() });
     if (parsed.data.autopilotEnabled !== undefined) void runAutoplayRefill(code);
     if (parsed.data.partyMode) void recordActivity(code, socket, "changed_mode", parsed.data.partyMode);
