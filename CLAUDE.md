@@ -109,6 +109,13 @@ client test suite; `tsc --noEmit` inside `npm run build -w client` is the type g
 - **Diagnosing a failed deploy:** check `_prisma_migrations` in the Neon SQL editor first —
   `finished_at` NULL means a migration failed; all rows populated means the crash is in
   application startup, not Prisma.
+- **Render does not swap traffic on a failed health check.** A deploy that crashes on boot
+  is marked "Failed" and the *previous* successful deploy keeps serving — silently. This
+  means `curl /health` staying "up" through a bad push is not evidence the new code is
+  live; it can just as easily mean the new build failed and the old one never stopped
+  answering. The Render dashboard's Deploys tab (status per commit SHA) is the only
+  reliable source of truth for "which commit is actually running" — check it directly
+  rather than inferring from HTTP behavior.
 
 ## NOT in git — back these up in a password manager
 
@@ -150,22 +157,25 @@ current state.
   re-uploads of one song don't each become a row. Autoplay default moved to Fresh (80).
   Queue drag handles restyled (they were rendering with the browser's default button face).
 
-**Current state — one open problem:**
-- The Render deploy of `f677f51` **failed at startup**. All eight migrations applied
-  cleanly (verified in `_prisma_migrations`), so it is *not* a Prisma failure. Production
-  is serving the previous build; the database schema is ahead of the running code, which
-  is safe.
-- Root cause identified as `libraryCoverage()` fanning ~150 concurrent `count` queries at
-  the Neon pool 30 s after boot, which the free-tier container did not survive. Fixed on
-  branch `library-scale-and-polish` (not yet merged) by a two-phase select: rotation
-  narrows the catalog to a shortlist first, then coverage is counted sequentially over
-  only that shortlist. **Not yet confirmed against production** — the raw startup stderr
-  was never captured, so this is a strong inference, not a proven fix.
-- The `LIBRAY` room exists but holds zero tracks, consistent with the crash happening
-  immediately after room creation.
+**Incident, now resolved:** the deploy of `f677f51` (PR #5) **failed at startup**. All eight
+migrations had applied cleanly (verified in `_prisma_migrations`), so it was not a Prisma
+failure — Render's dashboard showed "Failed" for that commit, meaning it never received
+traffic; the previous successful deploy kept serving throughout (see the Render deploy note
+above). Root cause: `libraryCoverage()` fanned ~150 concurrent `count` queries at the Neon
+pool 30 s after boot, which the free-tier container did not survive — a defect introduced
+in PR #4 and tripled in severity by PR #5 growing the seed catalog 50 → 150. Fixed directly
+on `main` as commit `16e457f`: a two-phase select where `preselectByRotation` narrows the
+catalog to a small shortlist using only in-memory rotation data, then `libraryCoverage`
+counts sequentially (not `Promise.all`) over just that shortlist.
+**Confirmed fixed** — `16e457f` shows "Live" on Render's Deploys tab (the authoritative
+signal; it only appears once the health check passes) and has stayed up since, so the
+startup crash does not recur.
 
-**Important caveat for whoever picks this up:** none of this session's work was ever run
-against a real database or browser — there is no local Postgres in that environment. Unit
-tests (51) and both builds pass, but playlist import, offline mode, Smart Discovery,
-seeding, and the background-playback changes have never executed end to end. Verify before
-trusting.
+**Important caveat for whoever picks this up:** most of this session's work was never run
+against a real database or browser before merging — there is no local Postgres in that
+environment. Unit tests (51) and both builds passed, but that is not the same as
+integration testing, and it is exactly how the above incident reached production undetected
+until a deploy failure surfaced it. Playlist import, offline mode, Smart Discovery, and the
+background-playback changes have still never been exercised end to end — verify before
+trusting. Prefer testing against a real deploy (or at least a local Postgres) before merging
+future schema or startup-path changes, not after.
