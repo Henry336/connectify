@@ -4,6 +4,49 @@
   --text: var(--ink);
 }
 
+/* Two-column desktop shell. Previously only the Chat tab got a height-constrained,
+   sticky side panel (capped at a hardcoded 680px), and only via a fragile
+   calc(100dvh - 88px) that had nothing to do with the panel actually filling its
+   column. The Queue tab had no such rule at all, so it just grew with its content
+   and forced the whole page to scroll to reach later queue items. Rebuilt as a
+   proper fixed-height flex shell instead: the nav keeps its natural height, the
+   content row fills what's left, and each column scrolls independently within
+   that, in both tabs, with no magic numbers. Mobile keeps the existing
+   single-column stacked layout below the 1120px breakpoint, where the whole page
+   scrolling normally is the expected pattern. */
+@media (min-width: 1121px) {
+  body:has(.room-shell) { height: 100dvh; overflow: hidden; }
+  .room-shell { display: flex; flex-direction: column; height: 100dvh; min-height: 100dvh; overflow: hidden; }
+  .room-nav { flex: 0 0 auto; }
+  .room-content { flex: 1; min-height: 0; overflow: hidden; }
+  .listening-pane { height: 100%; overflow-y: auto; }
+  .queue-pane,
+  .watch-party .queue-pane,
+  .queue-pane.chat-pane {
+    position: static;
+    align-self: stretch;
+    top: auto;
+    height: 100%;
+    max-height: none;
+    overflow: hidden;
+  }
+}
+
+/* Trims the vertical rhythm above the search bar. Measured at a common 1440x900
+   laptop viewport: the search bar sat 97px below the fold before this pass, and
+   reaching it required scrolling the whole page every time. */
+@media (min-width: 1121px) {
+  .video-stage { aspect-ratio: 16 / 6; }
+  .room-shell .listening-pane { padding-top: 14px; }
+  .room-heading { margin-bottom: 8px; }
+  .room-shell .room-qol-strip { margin-bottom: 8px; }
+  .now-card { padding-top: 10px; padding-bottom: 12px; }
+  .track-info { padding-top: 8px; padding-bottom: 6px; }
+  .search-shell { margin-top: 8px; }
+  .search-shell .add-bar { min-height: 56px; }
+  .quick-reactions { margin-top: 8px; }
+}
+
 /* Screen-reader-only live region. */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
