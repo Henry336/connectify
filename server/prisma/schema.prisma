@@ -17,7 +17,8 @@ model Room {
   isPlaying        Boolean  @default(false)
   playbackPosition Float    @default(0)
   startedAt        DateTime?
-  autopilotEnabled Boolean  @default(false)
+  autopilotEnabled Boolean  @default(true)
+  autoplayMinBuffer Int     @default(4)
   partyMode        String   @default("standard")
   theme            String   @default("violet")
   isLocked         Boolean  @default(false)
@@ -26,7 +27,7 @@ model Room {
   maxSongsPerUser  Int      @default(5)
   maxParticipants  Int      @default(50)
   chatSlowMode     Int      @default(0)
-  discoverable     Boolean  @default(false)
+  discoverable     Boolean  @default(true)
   revision         Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -57,6 +58,7 @@ model Track {
   removedAt  DateTime?
   removedBy  String?
   playNext   Boolean  @default(false)
+  autoplayBlocked Boolean @default(false)
   createdAt  DateTime @default(now())
   trackVotes TrackVote[]
   moments    Moment[]

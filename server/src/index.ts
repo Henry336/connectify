@@ -5,7 +5,7 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { advanceRoom, createRoomCode, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { searchConnectifyLibrary, searchYouTube } from "./search-service.js";
 import { resolveTrack } from "./youtube.js";
@@ -327,6 +327,31 @@ const operationCleanupTimer = setInterval(() => {
 }, 6 * 60 * 60 * 1000);
 operationCleanupTimer.unref();
 
+// Fire-and-forget: keep a Smart Autoplay buffer of upcoming songs without ever blocking
+// an Add, playback change, queue mutation, or join. Only recycles existing room history.
+async function runAutoplayRefill(code: string) {
+  try {
+    const revived = await refillAutoplay(code);
+    if (!revived?.length) return;
+    await emitQueueState(code);
+    await scheduleRoomEnd(code);
+    const roomId = revived[0].roomId;
+    const event = await prisma.roomActivity.create({
+      data: {
+        roomId,
+        actorId: "autopilot",
+        actorName: "DJ Autopilot",
+        action: "autoplay_revived",
+        target: String(revived.length),
+        detail: { titles: revived.slice(0, 3).map((track) => track.title) } as any,
+      },
+    });
+    io.to(code).emit("room:activity", event);
+  } catch (error) {
+    console.error("Autoplay refill failed:", error);
+  }
+}
+
 async function scheduleRoomEnd(code: string) {
   const previous = endTimers.get(code);
   if (previous) clearTimeout(previous);
@@ -352,6 +377,7 @@ async function scheduleRoomEnd(code: string) {
       if (!advanced) return;
       await emitQueueState(code);
       await scheduleRoomEnd(code);
+      void runAutoplayRefill(code);
     }).catch((error) => console.error("Authoritative room ending failed:", error));
   }, Math.min(delay, 2_147_000_000));
   timer.unref();
@@ -541,6 +567,7 @@ io.on("connection", (socket) => {
     await completeOperation(parsed.data.operationId, result);
     reply(result);
     void scheduleRoomEnd(code);
+    void runAutoplayRefill(code);
     if (parsed.data.reason === "manual") void recordActivity(code, socket, "skipped_track");
     console.log(JSON.stringify({ type: "socket_timing", event: "playback:advance", durationMs: Number((performance.now() - startedAt).toFixed(1)) }));
   }));
@@ -577,6 +604,36 @@ io.on("connection", (socket) => {
     await completeOperation(parsed.data.operationId, result);
     reply(result);
     void scheduleRoomEnd(code);
+    void runAutoplayRefill(code);
+  }));
+
+  socket.on("queue:block-autoplay", safe("queue:block-autoplay", async (payload, reply = () => undefined) => {
+    const code = socket.data.code as string | undefined;
+    const roomId = socket.data.roomId as string | undefined;
+    const userId = socket.data.userId as string | undefined;
+    const parsed = z.object({ trackId: z.string(), operationId: operationIdSchema.default(() => randomUUID()) }).safeParse(payload);
+    if (!code || !roomId || !userId || !parsed.success || !canControl(socket)) return reply({ ok: false });
+    const operation = await claimOperation(roomId, userId, "queue:block-autoplay", parsed.data.operationId);
+    if (!operation.fresh) return reply(operation.result || { ok: true });
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, currentTrackId: true } });
+    const track = await prisma.track.findFirst({ where: { id: parsed.data.trackId, roomId }, select: { id: true, playedAt: true, removedAt: true } });
+    if (!room || !track) {
+      await abandonOperation(parsed.data.operationId);
+      return reply({ ok: false });
+    }
+    // Block future revival, and drop it from the live queue if it is an upcoming pick.
+    const isUpcoming = !track.playedAt && !track.removedAt && track.id !== room.currentTrackId;
+    await prisma.$transaction([
+      prisma.track.update({ where: { id: track.id }, data: { autoplayBlocked: true, playNext: false, ...(isUpcoming ? { removedAt: new Date(), removedBy: userId } : {}) } }),
+      prisma.room.update({ where: { id: room.id }, data: { revision: { increment: 1 } } }),
+    ]);
+    const state = await roomQueueState(code);
+    io.to(code).emit("room:queue", state);
+    const result = { ok: true, state };
+    await completeOperation(parsed.data.operationId, result);
+    reply(result);
+    void scheduleRoomEnd(code);
+    void runAutoplayRefill(code);
   }));
 
   socket.on("queue:undo", safe(async (payload, reply = () => undefined) => {
@@ -740,6 +797,7 @@ io.on("connection", (socket) => {
     if (!code || !isHostSocket(socket)) return reply({ ok: false, error: "Host access required." });
     const parsed = z.object({
       autopilotEnabled: z.boolean().optional(), partyMode: partyModeSchema.optional(), theme: themeSchema.optional(),
+      autoplayMinBuffer: z.number().int().min(1).max(10).optional(),
       isLocked: z.boolean().optional(), guestsCanControl: z.boolean().optional(), guestsCanAdd: z.boolean().optional(),
       maxSongsPerUser: z.number().int().min(1).max(20).optional(),
       maxParticipants: z.number().int().min(2).max(100).optional(),
@@ -755,8 +813,9 @@ io.on("connection", (socket) => {
       }
     }
     reply({ ok: true });
-    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, maxParticipants: true, chatSlowMode: true, discoverable: true } });
-    io.to(code).emit("room:settings-patch", state);
+    const state = await prisma.room.findUnique({ where: { code }, select: { revision: true, autopilotEnabled: true, autoplayMinBuffer: true, partyMode: true, theme: true, isLocked: true, guestsCanControl: true, guestsCanAdd: true, maxSongsPerUser: true, maxParticipants: true, chatSlowMode: true, discoverable: true } });
+    io.to(code).emit("room:settings-patch", { ...state, serverTime: new Date().toISOString() });
+    if (parsed.data.autopilotEnabled !== undefined) void runAutoplayRefill(code);
     if (parsed.data.partyMode) void recordActivity(code, socket, "changed_mode", parsed.data.partyMode);
     else if (parsed.data.maxParticipants) void recordActivity(code, socket, "changed_capacity", String(parsed.data.maxParticipants));
     else if (parsed.data.chatSlowMode !== undefined) void recordActivity(code, socket, "changed_slow_mode", String(parsed.data.chatSlowMode));
@@ -923,7 +982,10 @@ io.on("connection", (socket) => {
     const room = await prisma.room.findUnique({ where: { code }, select: { id: true, currentTrackId: true, chatSlowMode: true } });
     if (!room || !person) return reply({ ok: false });
     const operation = await claimOperation(room.id, userId, "room:chat", parsed.data.operationId);
-    if (!operation.fresh) return reply(operation.result || { ok: false, error: "That message is still being confirmed." });
+    // Repeated presses and reconnect retries carry the same operationId: resolve to one message.
+    // A completed op replays its stored receipt; an in-flight one is idempotent success (the
+    // original send still broadcasts, and the client reconciles by operationId).
+    if (!operation.fresh) return reply(operation.result || { ok: true });
     const slowModeMs = isHostSocket(socket) ? 700 : Math.max(700, room.chatSlowMode * 1_000);
     if (Date.now() - Number(socket.data.lastChatAt || 0) < slowModeMs) {
       await abandonOperation(parsed.data.operationId);
@@ -953,7 +1015,7 @@ io.on("connection", (socket) => {
       },
       include: { replyTo: { select: { id: true, name: true, body: true, spoiler: true } } },
     });
-    io.to(code).emit("room:chat", message);
+    io.to(code).emit("room:chat", { ...message, operationId: parsed.data.operationId });
     const result = { ok: true, messageId: message.id };
     await completeOperation(parsed.data.operationId, result);
     reply(result);

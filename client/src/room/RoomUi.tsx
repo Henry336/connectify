@@ -27,7 +27,7 @@ function highlightedMessage(body: string, names: string[]) {
     : part);
 }
 
-export function ChatMessageRow({ message, previous, firstUnreadId, canControl, trackExists, mentionNames, revealed, onReveal, onJump, onReply }: {
+export function ChatMessageRow({ message, previous, firstUnreadId, canControl, trackExists, mentionNames, revealed, onReveal, onJump, onReply, onRetry }: {
   message: ChatMessage;
   previous?: ChatMessage;
   firstUnreadId: string | null;
@@ -38,19 +38,26 @@ export function ChatMessageRow({ message, previous, firstUnreadId, canControl, t
   onReveal: () => void;
   onJump: () => void;
   onReply: () => void;
+  onRetry?: () => void;
 }) {
   const messageDate = new Date(message.createdAt);
   const showDate = !previous || new Date(previous.createdAt).toDateString() !== messageDate.toDateString();
+  const clockTime = messageDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const grouped = Boolean(previous && !showDate && previous.userId === message.userId && !message.replyTo
+    && messageDate.getTime() - new Date(previous.createdAt).getTime() < 5 * 60 * 1000
+    && firstUnreadId !== message.id);
   const hidden = message.spoiler && !revealed;
   return <Fragment>
     {showDate && <div className="chat-date"><span>{messageDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: messageDate.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined })}</span></div>}
     {firstUnreadId === message.id && <div className="new-message-divider"><span>New messages</span></div>}
-    <article data-message-id={message.id}>
+    <article data-message-id={message.id} className={`${grouped ? "grouped" : ""} ${message.status === "sending" ? "is-sending" : ""}`.trim()}>
       <i>{message.avatar}</i>
       <div>
-        <header><strong>{message.name}</strong>{message.position !== null && <button disabled={!canControl || !trackExists} onClick={onJump}>{formatTime(message.position)}</button>}<button className="reply-message" onClick={onReply} aria-label={`Reply to ${message.name}`}><Reply /></button></header>
+        <header><strong>{message.name}</strong><time className="chat-time">{clockTime}</time>{message.position !== null && <button disabled={!canControl || !trackExists} onClick={onJump}>{formatTime(message.position)}</button>}<button className="reply-message" onClick={onReply} aria-label={`Reply to ${message.name}`}><Reply /></button></header>
         {message.replyTo && <div className="chat-reply-context"><strong>{message.replyTo.name}</strong><span>{message.replyTo.spoiler ? "Spoiler-hidden message" : message.replyTo.body}</span></div>}
         {hidden ? <button className="spoiler-message" onClick={onReveal}>Spoiler hidden · reveal</button> : <p>{highlightedMessage(message.body, mentionNames)}</p>}
+        {message.status === "sending" && <span className="chat-status">Sending…</span>}
+        {message.status === "failed" && <span className="chat-status failed">Not sent{onRetry && <button onClick={onRetry}>Retry</button>}</span>}
       </div>
     </article>
   </Fragment>;
@@ -60,6 +67,6 @@ export function SearchResult({ item, canControl, adding, onAdd }: { item: Search
   return <article className="search-result">
     <img src={item.thumbnail || "/connectify.svg"} alt="" loading="lazy" />
     <div><strong>{item.title}</strong><span>{item.artist}</span><small>{item.source === "connectify" ? "Connectify Library" : "YouTube"}</small></div>
-    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)} title="Add through the normal fair queue"><Plus />Add to queue</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)} title="Play immediately after the current video"><ListPlus />Play next</button>}</div>
+    <div className="search-result-actions"><button disabled={adding} onClick={() => void onAdd(item.url, "last", item)} title="Add through the normal fair queue"><Plus />{adding ? "Adding…" : "Add to queue"}</button>{canControl && <button disabled={adding} onClick={() => void onAdd(item.url, "next", item)} title="Play immediately after the current video"><ListPlus />Play next</button>}</div>
   </article>;
 }

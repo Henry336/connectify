@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDown, ArrowLeft, ArrowUp, Bell, BellOff, Check, CheckSquare, ChevronRight, Copy, Dna, EyeOff, Gamepad2, GripVertical, Heart, History, Info, KeyRound, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, Reply, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Square, Trash2, Undo2, UserMinus, UserRoundCheck, Users, Volume2, VolumeX, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeft, ArrowUp, Ban, Bell, BellOff, Check, CheckSquare, ChevronRight, Copy, Dna, EyeOff, Gamepad2, GripVertical, Heart, History, Info, KeyRound, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, Reply, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Square, Trash2, Undo2, UserMinus, UserRoundCheck, Users, Volume2, VolumeX, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { api, API_URL, recordClientTiming, waitForBackend } from "./api";
 import { getHostToken, getIdentity, rememberRoom, removeHostToken, saveHostToken, saveIdentity } from "./identity";
@@ -44,6 +44,7 @@ const activityText = (event: Pick<RoomActivity, "actorName" | "action" | "target
     bulk_remove: `removed${target}`,
     bulk_top: `moved${target} to the top`,
     bulk_bottom: `moved${target} to the bottom`,
+    autoplay_revived: `revived ${event.target || "some"} song${event.target === "1" ? "" : "s"} from room history`,
   };
   return `${event.actorName} ${labels[event.action] || event.action.replaceAll("_", " ")}`;
 };
@@ -78,7 +79,8 @@ export function RoomPage({ code }: { code: string }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [url, setUrl] = useState("");
   const [filter, setFilter] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [addingKeys, setAddingKeys] = useState<Set<string>>(() => new Set());
+  const chatSendingRef = useRef(false);
   const [error, setError] = useState("");
   const [joinErrorCode, setJoinErrorCode] = useState<string | null>(null);
   const [joinNotice, setJoinNotice] = useState("");
@@ -282,7 +284,16 @@ export function RoomPage({ code }: { code: string }) {
         window.setTimeout(() => setMomentBursts((previous) => previous.filter((item) => item.id !== moment.id)), 2600);
       });
       connection.on("room:chat", (message: ChatMessage) => {
-        setRoom((previous) => previous && !previous.messages.some((item) => item.id === message.id) ? { ...previous, messages: [...previous.messages, message] } : previous);
+        setRoom((previous) => {
+          if (!previous) return previous;
+          // Reconcile our optimistic bubble (matched by operationId) with the confirmed row,
+          // and drop any duplicate delivery of an already-shown message.
+          if (message.operationId && previous.messages.some((item) => item.operationId === message.operationId)) {
+            return { ...previous, messages: previous.messages.map((item) => item.operationId === message.operationId ? { ...message, status: "sent" } : item) };
+          }
+          if (previous.messages.some((item) => item.id === message.id)) return previous;
+          return { ...previous, messages: [...previous.messages, message] };
+        });
         if (message.userId === identity.userId) return;
         const activelyReading = sideTabRef.current === "chat" && !document.hidden && chatAtBottomRef.current;
         if (!activelyReading) {
@@ -561,7 +572,13 @@ export function RoomPage({ code }: { code: string }) {
   };
   const addUrl = async (targetUrl: string, targetPlacement: "last" | "next" = placement, metadata?: SearchItem) => {
     if (!targetUrl.trim()) return;
-    setAdding(true); setError("");
+    const addKey = metadata?.providerId || targetUrl.trim();
+    // Idempotent against repeated clicks/Enter: one in-flight add per track, and never a second
+    // optimistic entry for a track that is already pending locally.
+    if (addingKeys.has(addKey)) return;
+    if (metadata?.providerId && room?.tracks.some((track) => track.pending && track.providerId === metadata.providerId)) return;
+    setAddingKeys((previous) => new Set(previous).add(addKey));
+    setError("");
     const pendingId = `pending-${crypto.randomUUID()}`;
     const operationId = newOperationId();
     const pendingTrack: Track = {
@@ -582,7 +599,9 @@ export function RoomPage({ code }: { code: string }) {
       playNext: targetPlacement === "next",
       pending: true,
     };
-    setRoom((previous) => previous ? { ...previous, tracks: [...previous.tracks, pendingTrack], queueOrder: [...previous.queueOrder, pendingId] } : previous);
+    // Optimistically make the first/only song the current track so the player begins
+    // pre-buffering its video immediately, before the server confirms the add.
+    setRoom((previous) => previous ? { ...previous, tracks: [...previous.tracks, pendingTrack], queueOrder: [...previous.queueOrder, pendingId], currentTrackId: previous.currentTrackId || pendingId } : previous);
     try {
       const request = () => api<Track | { pending: true; operationId: string }>(`/api/rooms/${code}/tracks`, {
         method: "POST",
@@ -604,22 +623,26 @@ export function RoomPage({ code }: { code: string }) {
       }
       if ("pending" in created) {
         window.setTimeout(requestSync, 500);
-        setUrl(""); setPlacement("last"); setSearchOpen(false);
+        setPlacement("last");
+        if (!metadata) { setUrl(""); setSearchOpen(false); }
         return;
       }
       setRoom((previous) => previous ? {
         ...previous,
         tracks: previous.tracks.map((track) => track.id === pendingId ? created : track),
         queueOrder: previous.queueOrder.map((id) => id === pendingId ? created.id : id),
-        currentTrackId: previous.currentTrackId || created.id,
+        currentTrackId: previous.currentTrackId === pendingId ? created.id : (previous.currentTrackId || created.id),
       } : previous);
-      setUrl(""); setPlacement("last"); setSearchOpen(false); setLocalResults([]); setYoutubeResults([]); setNextPageToken(null); setSearchError("");
+      setPlacement("last");
+      // Keep the search panel open after adding from results so listeners can queue several
+      // in a row; only a pasted-URL add clears the composer and closes the panel.
+      if (!metadata) { setUrl(""); setSearchOpen(false); setLocalResults([]); setYoutubeResults([]); setNextPageToken(null); setSearchError(""); }
     }
     catch (err) {
-      setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.filter((track) => track.id !== pendingId), queueOrder: previous.queueOrder.filter((id) => id !== pendingId) } : previous);
+      setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.filter((track) => track.id !== pendingId), queueOrder: previous.queueOrder.filter((id) => id !== pendingId), currentTrackId: previous.currentTrackId === pendingId ? null : previous.currentTrackId } : previous);
       setError(err instanceof Error ? err.message : "Could not add that track.");
     }
-    finally { setAdding(false); }
+    finally { setAddingKeys((previous) => { const next = new Set(previous); next.delete(addKey); return next; }); }
   };
   const searchYouTube = async (loadMore = false) => {
     const query = loadMore ? lastSearch : url.trim();
@@ -716,9 +739,15 @@ export function RoomPage({ code }: { code: string }) {
   };
   const copyQueue = async () => { await navigator.clipboard.writeText(orderedTracks.map((track, index) => `${index + 1}. ${room?.partyMode === "blind_pick" && track.id !== room.currentTrackId ? `Mystery pick by ${track.addedBy}` : `${track.title} — ${track.artist}`}`).join("\n") || "Connectify queue is empty"); setQueueMenu(false); };
   const shareDna = async () => { await navigator.clipboard.writeText(`${room?.name || "Our room"} is a ${roomDna.vibe.toLowerCase()} — ${roomDna.contributors} contributors, ${roomDna.topArtist} on repeat, ${roomDna.love}% crowd love. ${window.location.href}`); setCopied(true); window.setTimeout(() => setCopied(false), 1800); };
-  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "maxParticipants" | "chatSlowMode" | "discoverable">>) => {
+  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "autoplayMinBuffer" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "maxParticipants" | "chatSlowMode" | "discoverable">>) => {
     setRoom((previous) => previous ? { ...previous, ...settings } : previous);
     socket?.emit("room:settings", settings, (result: { ok: boolean; error?: string }) => { if (!result?.ok) { requestSync(); setError(result?.error || "Could not update the room."); } });
+  };
+  const blockAutoplay = (track: Track) => {
+    if (!socket || track.pending) return;
+    setHistoryTracks((previous) => previous.filter((item) => item.id !== track.id));
+    setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.filter((item) => item.id !== track.id), queueOrder: previous.queueOrder.filter((id) => id !== track.id) } : previous);
+    emitReliable(socket, "queue:block-autoplay", { trackId: track.id, operationId: newOperationId() }, (result: { ok: boolean; error?: string }) => { if (!result?.ok) { requestSync(); setError(result?.error || "Could not block that track."); } });
   };
   const removeTrack = (track: Track) => {
     if (!socket || track.pending) return;
@@ -750,12 +779,48 @@ export function RoomPage({ code }: { code: string }) {
   };
   const kickMember = removeMember;
   const clearQueue = () => { if (window.confirm("Clear the entire queue and listening history?")) socket?.emit("queue:clear", {}, () => setQueueMenu(false)); };
-  const sendChat = (event: React.FormEvent) => {
-    event.preventDefault(); if (!chatBody.trim() || !socket) return;
-    emitReliable(socket, "room:chat", { body: chatBody, spoiler: chatSpoiler, trackId: current?.id || null, position: room ? effectivePosition(room) : null, replyToId: replyingTo?.id || null, operationId: newOperationId() }, (result: { ok: boolean; error?: string }) => {
-      if (result?.ok) { setChatBody(""); setChatSpoiler(false); setReplyingTo(null); }
-      else setError(result?.error || "Could not send that message.");
+  const deliverChat = (message: ChatMessage) => {
+    if (!socket) return;
+    const operationId = message.operationId || newOperationId();
+    setRoom((previous) => previous ? { ...previous, messages: previous.messages.map((item) => item.id === message.id ? { ...item, status: "sending" } : item) } : previous);
+    emitReliable(socket, "room:chat", { body: message.body, spoiler: message.spoiler, trackId: message.trackId, position: message.position, replyToId: message.replyToId, operationId }, (result: { ok: boolean; error?: string }) => {
+      // The server echo (matched by operationId) may already have marked this sent; don't undo it.
+      setRoom((previous) => previous ? {
+        ...previous,
+        messages: previous.messages.map((item) => item.id === message.id && item.status !== "sent"
+          ? { ...item, status: result?.ok ? "sent" : "failed" }
+          : item),
+      } : previous);
+      if (!result?.ok) setError(result?.error || "Could not send that message.");
     });
+  };
+  const sendChat = (event: React.FormEvent) => {
+    event.preventDefault();
+    const body = chatBody.trim();
+    // Re-entry guard: a same-frame double Enter/click (before the composer clears) can't
+    // fire twice. Released next tick, so consecutive messages are never blocked.
+    if (!body || !socket || chatSendingRef.current) return;
+    chatSendingRef.current = true;
+    window.setTimeout(() => { chatSendingRef.current = false; }, 0);
+    const operationId = newOperationId();
+    const position = room && current ? effectivePosition(room) : null;
+    const optimistic: ChatMessage = {
+      id: `optimistic-${operationId}`, roomId: room?.id || "", trackId: current?.id || null,
+      userId: identity.userId, name: identity.name, avatar: identity.avatar, body,
+      position, spoiler: chatSpoiler, replyToId: replyingTo?.id || null,
+      replyTo: replyingTo ? { id: replyingTo.id, name: replyingTo.name, body: replyingTo.body, spoiler: replyingTo.spoiler } : null,
+      createdAt: new Date().toISOString(), operationId, status: "sending",
+    };
+    setRoom((previous) => previous ? { ...previous, messages: [...previous.messages, optimistic] } : previous);
+    setChatBody(""); setChatSpoiler(false); setReplyingTo(null);
+    window.setTimeout(() => { const list = chatListRef.current; if (list) list.scrollTop = list.scrollHeight; }, 0);
+    deliverChat(optimistic);
+  };
+  const retryChat = (message: ChatMessage) => {
+    if (chatSendingRef.current) return;
+    chatSendingRef.current = true;
+    window.setTimeout(() => { chatSendingRef.current = false; }, 0);
+    deliverChat({ ...message, status: "sending" });
   };
   const insertMention = (name: string) => {
     setChatBody((body) => body.replace(/(^|\s)@[^@\n]*$/, `$1@${name} `));
@@ -937,7 +1002,7 @@ export function RoomPage({ code }: { code: string }) {
         {tutorialVisible && <aside className="room-tutorial"><Sparkles /><div><strong>New here?</strong><span>Add or search for a video, then use Queue and Chat to shape the room together.</span></div><button onClick={() => { localStorage.setItem("connectify.roomTutorialDismissed", "true"); setTutorialVisible(false); }}>Got it</button><button className="tutorial-skip" onClick={() => { localStorage.setItem("connectify.roomTutorialDismissed", "true"); setTutorialVisible(false); }} aria-label="Dismiss tutorial"><X /></button></aside>}
         <div className="now-card">
           <div className="video-stage">
-            <YouTubePlayer ref={playerRef} track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onDuration={(duration) => current && socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} onAutoplayBlocked={() => setAudioBlocked(true)} onAudioUnlocked={() => setAudioBlocked(false)} onPlaybackIntent={(isPlaying, position) => {
+            <YouTubePlayer ref={playerRef} track={current} room={room} volume={volume} onEnded={() => skip(1, "ended")} onError={() => { if (canControl) { setError("Skipped a video that could not play here."); skip(1, "manual"); } }} onDuration={(duration) => current && socket?.emit("track:duration", { trackId: current.id, duration })} onSync={setSyncHealth} onAutoplayBlocked={() => setAudioBlocked(true)} onAudioUnlocked={() => setAudioBlocked(false)} onPlaybackIntent={(isPlaying, position) => {
               if (!current || !canControl) return false;
               setPlayback(current, isPlaying, position);
               return true;
@@ -955,11 +1020,11 @@ export function RoomPage({ code }: { code: string }) {
         </div>
 
         <div className="search-shell">
-          <form className="add-bar search-bar" onSubmit={submitComposer}><span className="provider-icon"><Search /></span><input type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => url.trim().length >= 2 && !isYouTubeUrl(url) && setSearchOpen(true)} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={adding || searching || !url.trim() || !canAdd}>{isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}{adding ? "Adding…" : searching ? "Searching…" : isYouTubeUrl(url) ? placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</button></form>
+          <form className="add-bar search-bar" onSubmit={submitComposer}><span className="provider-icon"><Search /></span><input type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => url.trim().length >= 2 && !isYouTubeUrl(url) && setSearchOpen(true)} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={addingKeys.has(url.trim()) || searching || !url.trim() || !canAdd}>{isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}{addingKeys.has(url.trim()) ? "Adding…" : searching ? "Searching…" : isYouTubeUrl(url) ? placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</button></form>
           {searchOpen && !isYouTubeUrl(url) && <section className="search-results" aria-live="polite">
             <header><div><strong>Find something to play</strong><span>Library results are instant. Live YouTube search uses cached results whenever possible.</span></div><button className="icon-button" onClick={() => setSearchOpen(false)} aria-label="Close search"><X /></button></header>
-            {localResults.length > 0 && <div className="search-group"><div className="search-group-title"><Library /><strong>Connectify Library</strong><span>{localResults.length} matches</span></div><div className="search-grid">{localResults.map((item) => <SearchResult key={`local-${item.providerId}`} item={item} canControl={canControl} adding={adding} onAdd={addUrl} />)}</div></div>}
-            {(searching || youtubeResults.length > 0 || searchError) && <div className="search-group"><div className="search-group-title"><Youtube /><strong>Live YouTube</strong>{liveCached && !searching && <span>Cached</span>}</div>{searching ? <div className="search-loading"><i /><span>Searching YouTube…</span></div> : <><div className="search-grid">{youtubeResults.map((item) => <SearchResult key={`youtube-${item.providerId}`} item={item} canControl={canControl} adding={adding} onAdd={addUrl} />)}</div>{searchError && <div className="search-error"><span>{searchError}</span><small>Paste a YouTube URL above to keep going.</small></div>}{nextPageToken && <button className="load-more" onClick={() => void searchYouTube(true)} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load 25 more results"}</button>}<p className="youtube-attribution">Results provided by YouTube. By using live search, you agree to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms of Service</a>.</p></>}</div>}
+            {localResults.length > 0 && <div className="search-group"><div className="search-group-title"><Library /><strong>Connectify Library</strong><span>{localResults.length} matches</span></div><div className="search-grid">{localResults.map((item) => <SearchResult key={`local-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} onAdd={addUrl} />)}</div></div>}
+            {(searching || youtubeResults.length > 0 || searchError) && <div className="search-group"><div className="search-group-title"><Youtube /><strong>Live YouTube</strong>{liveCached && !searching && <span>Cached</span>}</div>{searching ? <div className="search-loading"><i /><span>Searching YouTube…</span></div> : <><div className="search-grid">{youtubeResults.map((item) => <SearchResult key={`youtube-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} onAdd={addUrl} />)}</div>{searchError && <div className="search-error"><span>{searchError}</span><small>Paste a YouTube URL above to keep going.</small></div>}{nextPageToken && <button className="load-more" onClick={() => void searchYouTube(true)} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load 25 more results"}</button>}<p className="youtube-attribution">Results provided by YouTube. By using live search, you agree to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms of Service</a>.</p></>}</div>}
             {!searching && localResults.length === 0 && youtubeResults.length === 0 && !searchError && <div className="search-prompt"><Search /><strong>Search the wider catalog</strong><span>Press Enter or choose “Search YouTube.” Results load 25 at a time, and you can keep loading more.</span></div>}
           </section>}
         </div>
@@ -971,7 +1036,7 @@ export function RoomPage({ code }: { code: string }) {
       <aside className={`queue-pane ${sideTab === "chat" ? "chat-pane" : ""}`}>
         <div className="queue-header"><div><span>{sideTab === "chat" ? "ROOM CHAT" : room.partyMode === "pass_aux" ? "PASS THE AUX" : "FAIR QUEUE"}</span><h2>{sideTab === "chat" ? "Conversation" : "Room queue"} <small>{sideTab === "chat" ? unreadChat || "" : orderedTracks.length}</small></h2></div>{sideTab === "queue" && <div className="menu-wrap"><button className="icon-button" aria-label="Queue options" aria-expanded={queueMenu} onClick={() => { setQueueMenu(!queueMenu); setRoomMenu(false); }}><MoreHorizontal /></button>{queueMenu && <div className="action-menu queue-menu">{isHost && <button onClick={() => { setPartyOpen(true); setQueueMenu(false); }}><Gamepad2 />Party mode</button>}{isHost && <button onClick={() => { updateSettings({ autopilotEnabled: !room.autopilotEnabled }); setQueueMenu(false); }}><WandSparkles />DJ Autopilot <i className={room.autopilotEnabled ? "toggle on" : "toggle"} /></button>}<button onClick={() => { setHistoryOpen(true); setQueueMenu(false); if (!historyTracks.length) loadHistory(true); }}><History />Listening history</button><button onClick={() => { setFairInfoOpen(true); setQueueMenu(false); }}><Info />How Fair Queue works</button><button onClick={copyQueue}><Copy />Copy queue</button>{isHost && <button onClick={clearQueue}><Trash2 />Clear room queue</button>}</div>}</div>}</div>
         <div className="room-tabs"><button className={sideTab === "queue" ? "active" : ""} onClick={() => setSideTab("queue")}><ListMusic />Queue <small>{orderedTracks.length || ""}</small></button><button className={sideTab === "chat" ? "active" : ""} onClick={openChat}><MessageCircle />Chat <small>{unreadChat || ""}</small></button></div>
-        {sideTab === "queue" && <>{room.autopilotEnabled && <div className="autopilot-banner"><WandSparkles /><div><strong>DJ Autopilot is on</strong><span>Crowd favorites return only after fresh picks run out.</span></div>{isHost && <button onClick={() => updateSettings({ autopilotEnabled: false })}><X /></button>}</div>}
+        {sideTab === "queue" && <>{room.autopilotEnabled && <div className="autopilot-banner"><WandSparkles /><div><strong>Smart Autoplay is on</strong><span>Room favorites return to keep {room.autoplayMinBuffer} songs ready when the queue runs low.</span></div>{isHost && <button onClick={() => updateSettings({ autopilotEnabled: false })}><X /></button>}</div>}
         <label className="queue-search"><Search size={17} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search queue" /></label>
         {isHost && <div className={`queue-bulk-bar ${selectionMode ? "active" : ""}`}>
           <button onClick={() => { setSelectionMode((enabled) => !enabled); setSelectedTrackIds(new Set()); }}>{selectionMode ? <X /> : <CheckSquare />}{selectionMode ? "Done" : "Select"}</button>
@@ -998,12 +1063,12 @@ export function RoomPage({ code }: { code: string }) {
           <div className="chat-toolbar"><span>Alerts</span><button className={chatSound ? "active" : ""} onClick={() => setChatSound((enabled) => !enabled)} title={chatSound ? "Turn message sounds off" : "Turn message sounds on"}>{chatSound ? <Volume2 /> : <VolumeX />}Sound</button><button className={chatNotifications ? "active" : ""} onClick={() => void toggleChatNotifications()} title={chatNotifications ? "Turn browser notifications off" : "Turn browser notifications on"}>{chatNotifications ? <Bell /> : <BellOff />}Notify</button></div>
           <div className="chat-list" ref={chatListRef} onScroll={handleChatScroll}>
             {hasMoreChat && <button className="load-older-chat" onClick={loadOlderMessages} disabled={loadingOlderChat}>{loadingOlderChat ? "Loading earlier messages…" : "Load earlier messages"}</button>}
-            {room.messages.length ? room.messages.map((message, index) => <ChatMessageRow key={message.id} message={message} previous={room.messages[index - 1]} firstUnreadId={firstUnreadId} canControl={canControl} trackExists={room.tracks.some((track) => track.id === message.trackId)} mentionNames={mentionNames} revealed={revealedSpoilers.has(message.id)} onReveal={() => setRevealedSpoilers((previous) => new Set(previous).add(message.id))} onJump={() => jumpToMessage(message)} onReply={() => setReplyingTo(message)} />) : <div className="chat-empty"><MessageCircle /><strong>The room is quiet</strong><span>Start the conversation. Messages can stay attached to this exact song or video moment.</span></div>}
+            {room.messages.length ? room.messages.map((message, index) => <ChatMessageRow key={message.id} message={message} previous={room.messages[index - 1]} firstUnreadId={firstUnreadId} canControl={canControl} trackExists={room.tracks.some((track) => track.id === message.trackId)} mentionNames={mentionNames} revealed={revealedSpoilers.has(message.id)} onReveal={() => setRevealedSpoilers((previous) => new Set(previous).add(message.id))} onJump={() => jumpToMessage(message)} onReply={() => setReplyingTo(message)} onRetry={message.status === "failed" ? () => retryChat(message) : undefined} />) : <div className="chat-empty"><MessageCircle /><strong>The room is quiet</strong><span>Start the conversation. Messages can stay attached to this exact song or video moment.</span></div>}
           </div>
           {(!chatAtBottom || unreadChat > 0) && <button className="jump-latest-chat" onClick={jumpToLatestChat}>{unreadChat ? `${unreadChat} new message${unreadChat === 1 ? "" : "s"}` : "Jump to latest"}<ArrowDown /></button>}
           <form className="chat-compose" onSubmit={sendChat}>
             {replyingTo && <div className="replying-to"><Reply /><span><strong>Replying to {replyingTo.name}</strong><small>{replyingTo.spoiler ? "Spoiler-hidden message" : replyingTo.body}</small></span><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply"><X /></button></div>}
-            <textarea value={chatBody} onChange={(event) => setChatBody(event.target.value)} maxLength={300} placeholder="Say something about this moment…" />
+            <textarea value={chatBody} onChange={(event) => setChatBody(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={300} placeholder="Say something about this moment… (Enter to send, Shift+Enter for a new line)" />
             {mentionSuggestions.length > 0 && <div className="mention-suggestions">{mentionSuggestions.map((name) => <button type="button" key={name} onClick={() => insertMention(name)}>@{name}</button>)}</div>}
             <div><label><input type="checkbox" checked={chatSpoiler} onChange={(event) => setChatSpoiler(event.target.checked)} /> Hide as spoiler</label><button disabled={!chatBody.trim()} aria-label="Send message"><Send /></button></div>
           </form>
@@ -1022,8 +1087,8 @@ export function RoomPage({ code }: { code: string }) {
     {fairInfoOpen && <FeatureModal title="Fair Queue" icon={<Sparkles />} onClose={() => setFairInfoOpen(false)}><div className="fair-explainer"><div><b>1</b><span><strong>Everyone gets a turn</strong>Contributors rotate before one person can play twice.</span></div><div><b>2</b><span><strong>Votes still matter</strong>Votes choose which of that contributor’s songs leads their turn.</span></div><div><b>3</b><span><strong>No stale repeats</strong>Played songs leave the fresh queue. Autopilot revives favorites only when it runs dry.</span></div></div></FeatureModal>}
     {partyOpen && <FeatureModal title="Party Modes" icon={<Gamepad2 />} onClose={() => setPartyOpen(false)}><p className="modal-intro">Change the rules for everyone in this persistent room.</p><div className="party-grid">{partyModes.map((mode) => <button key={mode.id} className={room.partyMode === mode.id ? "active" : ""} disabled={!isHost} onClick={() => { updateSettings({ partyMode: mode.id }); setPartyOpen(false); }}><span>{mode.id === "blind_pick" ? <EyeOff /> : mode.id === "one_take" ? <Lock /> : mode.id === "discovery" ? <Sparkles /> : <Gamepad2 />}</span><strong>{mode.name}</strong><small>{mode.description}</small>{room.partyMode === mode.id && <Check />}</button>)}</div>{!isHost && <p className="permission-note">Only the host can change the active mode.</p>}</FeatureModal>}
     {membersOpen && <FeatureModal title="Room Profile" icon={<Users />} onClose={() => setMembersOpen(false)}><div className="room-profile-card"><span>PERMANENT ROOM</span><strong>{room.name}</strong><p>Room {room.code} · Created {new Date(room.createdAt).toLocaleDateString()}</p><button onClick={copyInvite}><Link2 />{copied ? "Link copied" : "Copy permanent room link"}</button></div><div className="profile-section"><h3><Users /> Members <small>{room.memberCount ?? room.members.length}</small></h3><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Host" : `Last seen ${new Date(member.lastSeenAt).toLocaleDateString()}`}</small></span>{member.role === "host" && <b>HOST</b>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div><div className="profile-section"><h3><Palette /> Room theme</h3><div className="theme-picker">{(["violet", "sunset", "ocean", "mono"] as RoomTheme[]).map((theme) => <button key={theme} className={`${theme} ${room.theme === theme ? "active" : ""}`} disabled={!isHost} onClick={() => updateSettings({ theme })} title={theme}><i /></button>)}</div></div></FeatureModal>}
-    {historyOpen && <FeatureModal title="Listening History" icon={<History />} onClose={() => setHistoryOpen(false)}>{historyTracks.length ? <><div className="history-list">{historyTracks.map((track, index) => <button key={track.id} disabled={!canControl} onClick={() => { setRoom((previous) => previous && !previous.tracks.some((item) => item.id === track.id) ? { ...previous, tracks: [...previous.tracks, track] } : previous); setPlayback(track, true, 0); setHistoryOpen(false); }}><span>{index + 1}</span><img src={track.thumbnail || ""} alt="" /><div><strong>{track.title}</strong><small>{track.artist} · Added by {track.addedBy}</small></div><Play /></button>)}</div>{historyHasMore && <button className="load-page" onClick={() => loadHistory(false)}>Load more history</button>}</> : historyLoading ? <p className="page-loading">Loading listening history…</p> : <div className="modal-empty"><History /><strong>No listening history yet</strong><span>Finished and skipped songs will stay here for returning members.</span></div>}</FeatureModal>}
-    {hostOpen && <FeatureModal title="Host Controls" icon={<ShieldCheck />} onClose={() => setHostOpen(false)}><p className="modal-intro">These rules are enforced by the room server.</p><div className="recovery-card"><KeyRound /><div><strong>Room recovery key</strong><span>Save this somewhere private. It restores host access on another device.</span></div><button onClick={() => void copyRecoveryKey()}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy key"}</button></div><div className="host-settings"><button onClick={() => updateSettings({ isLocked: !room.isLocked })}><span><Lock /><b>Lock room</b><small>Only returning members can join.</small></span><i className={room.isLocked ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanControl: !room.guestsCanControl })}><span><Play /><b>Guest playback controls</b><small>Allow guests to play, seek, skip, and reorder.</small></span><i className={room.guestsCanControl ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanAdd: !room.guestsCanAdd })}><span><Plus /><b>Guest song submissions</b><small>Allow guests to add URLs to the queue.</small></span><i className={room.guestsCanAdd ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ discoverable: !room.discoverable })}><span><Library /><b>Contribute to discovery</b><small>Let video metadata from this room appear in Connectify Library results. Room and member details stay private.</small></span><i className={room.discoverable ? "toggle on" : "toggle"} /></button><label><span><ListMusic /><b>Upcoming songs per guest</b><small>Prevents one listener from flooding the queue.</small></span><select value={room.maxSongsPerUser} onChange={(event) => updateSettings({ maxSongsPerUser: Number(event.target.value) })}>{[1,2,3,5,8,10,15,20].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><div className="profile-section moderation"><h3><Users /> Members and host handoff</h3><p className="section-help">Handoff rotates the recovery key and works only for someone currently online.</p><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Room host" : people.some((person) => person.userId === member.userId) ? "Online" : "Offline"}</small></span>{member.role === "guest" && <div className="member-actions">{people.some((person) => person.userId === member.userId) && <button className="handoff" onClick={() => handoffHost(member)} title={`Make ${member.name} the host`}><UserRoundCheck /></button>}<button onClick={() => kickMember(member.id, member.name)} title={`Remove ${member.name}`}><UserMinus /></button></div>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div></FeatureModal>}
+    {historyOpen && <FeatureModal title="Listening History" icon={<History />} onClose={() => setHistoryOpen(false)}>{historyTracks.length ? <><div className="history-list">{historyTracks.map((track, index) => <div key={track.id} className="history-row"><button disabled={!canControl} onClick={() => { setRoom((previous) => previous && !previous.tracks.some((item) => item.id === track.id) ? { ...previous, tracks: [...previous.tracks, track] } : previous); setPlayback(track, true, 0); setHistoryOpen(false); }}><span>{index + 1}</span><img src={track.thumbnail || ""} alt="" /><div><strong>{track.title}</strong><small>{track.artist} · Added by {track.addedBy}</small></div><Play /></button>{canControl && <button className="history-block" onClick={() => blockAutoplay(track)} title="Never autoplay this song again"><Ban /></button>}</div>)}</div>{historyHasMore && <button className="load-page" onClick={() => loadHistory(false)}>Load more history</button>}</> : historyLoading ? <p className="page-loading">Loading listening history…</p> : <div className="modal-empty"><History /><strong>No listening history yet</strong><span>Finished and skipped songs will stay here for returning members.</span></div>}</FeatureModal>}
+    {hostOpen && <FeatureModal title="Host Controls" icon={<ShieldCheck />} onClose={() => setHostOpen(false)}><p className="modal-intro">These rules are enforced by the room server.</p><div className="recovery-card"><KeyRound /><div><strong>Room recovery key</strong><span>Save this somewhere private. It restores host access on another device.</span></div><button onClick={() => void copyRecoveryKey()}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy key"}</button></div><div className="host-settings"><button onClick={() => updateSettings({ isLocked: !room.isLocked })}><span><Lock /><b>Lock room</b><small>Only returning members can join.</small></span><i className={room.isLocked ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanControl: !room.guestsCanControl })}><span><Play /><b>Guest playback controls</b><small>Allow guests to play, seek, skip, and reorder.</small></span><i className={room.guestsCanControl ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanAdd: !room.guestsCanAdd })}><span><Plus /><b>Guest song submissions</b><small>Allow guests to add URLs to the queue.</small></span><i className={room.guestsCanAdd ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ autopilotEnabled: !room.autopilotEnabled })}><span><WandSparkles /><b>Smart Autoplay</b><small>Keep the music going by reviving this room’s favorites when the queue runs low.</small></span><i className={room.autopilotEnabled ? "toggle on" : "toggle"} /></button><label><span><RotateCw /><b>Autoplay buffer</b><small>Upcoming songs Autopilot keeps ready before the current one ends.</small></span><select value={room.autoplayMinBuffer} onChange={(event) => updateSettings({ autoplayMinBuffer: Number(event.target.value) })}>{[3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><button onClick={() => updateSettings({ discoverable: !room.discoverable })}><span><Library /><b>Contribute to Connectify Library</b><small>Let video metadata from this room appear in Connectify Library search. Room and member details stay private. Independent of Smart Autoplay.</small></span><i className={room.discoverable ? "toggle on" : "toggle"} /></button><label><span><ListMusic /><b>Upcoming songs per guest</b><small>Prevents one listener from flooding the queue.</small></span><select value={room.maxSongsPerUser} onChange={(event) => updateSettings({ maxSongsPerUser: Number(event.target.value) })}>{[1,2,3,5,8,10,15,20].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><div className="profile-section moderation"><h3><Users /> Members and host handoff</h3><p className="section-help">Handoff rotates the recovery key and works only for someone currently online.</p><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Room host" : people.some((person) => person.userId === member.userId) ? "Online" : "Offline"}</small></span>{member.role === "guest" && <div className="member-actions">{people.some((person) => person.userId === member.userId) && <button className="handoff" onClick={() => handoffHost(member)} title={`Make ${member.name} the host`}><UserRoundCheck /></button>}<button onClick={() => kickMember(member.id, member.name)} title={`Remove ${member.name}`}><UserMinus /></button></div>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div></FeatureModal>}
     {moderationOpen && <FeatureModal title="Listener moderation" icon={<UserMinus />} onClose={() => setModerationOpen(false)}>
       <p className="modal-intro">Removing disconnects someone now; blocking prevents this guest identity from rejoining until you unblock it.</p>
       <div className="moderation-groups">
