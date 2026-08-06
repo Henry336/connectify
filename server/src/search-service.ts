@@ -25,6 +25,22 @@ export function uniqueSearchItems(items: SearchItem[], limit = 30) {
 
 const asSearchItem = (track: { providerId: string; title: string; artist: string; thumbnail: string | null; url: string; duration: number | null }): SearchItem => ({ ...track, source: "connectify" });
 
+// How many public Library tracks already match each candidate seed query, so the growth
+// job can prioritize genres/moods that are thin over ones already well covered.
+export async function libraryCoverage(queries: string[]): Promise<Record<string, number>> {
+  const counts = await Promise.all(queries.map(async (query) => {
+    const count = await prisma.track.count({
+      where: {
+        removedAt: null,
+        room: { discoverable: true },
+        OR: [{ title: { contains: query, mode: Prisma.QueryMode.insensitive } }, { artist: { contains: query, mode: Prisma.QueryMode.insensitive } }],
+      },
+    });
+    return [query, count] as const;
+  }));
+  return Object.fromEntries(counts);
+}
+
 export async function searchConnectifyLibrary(rawQuery: string, roomCode: string) {
   const query = normalizeSearchQuery(rawQuery);
   const textFilter = { OR: [{ title: { contains: query, mode: Prisma.QueryMode.insensitive } }, { artist: { contains: query, mode: Prisma.QueryMode.insensitive } }] };
@@ -76,7 +92,10 @@ export async function fetchPlaylistItems(playlistId: string): Promise<PlaylistIm
   return mapPlaylistItems(await response.json());
 }
 
-export async function searchYouTube(rawQuery: string, pageToken?: string): Promise<YouTubeSearchResponse> {
+// apiKey defaults to the user-facing search key; the library-seeding job passes its own
+// dedicated key so the two never compete for the same daily quota. Results are cached by
+// query text alone, so a cache hit from either source benefits the other.
+export async function searchYouTube(rawQuery: string, pageToken?: string, apiKey = process.env.YOUTUBE_API_KEY): Promise<YouTubeSearchResponse> {
   const query = normalizeSearchQuery(rawQuery);
   const key = cacheKey(query, pageToken);
   const memory = memoryCache.get(key);
@@ -94,7 +113,7 @@ export async function searchYouTube(rawQuery: string, pageToken?: string): Promi
   if (pending) return pending;
 
   const request = (async () => {
-    const params = new URLSearchParams({ key: process.env.YOUTUBE_API_KEY!, part: "snippet", q: query, type: "video", maxResults: "25", videoEmbeddable: "true", safeSearch: "moderate" });
+    const params = new URLSearchParams({ key: apiKey!, part: "snippet", q: query, type: "video", maxResults: "25", videoEmbeddable: "true", safeSearch: "moderate" });
     if (pageToken) params.set("pageToken", pageToken);
     const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`, { signal: AbortSignal.timeout(8000) });
     if (!response.ok) { const error: any = new Error("YouTube search failed."); error.status = response.status; throw error; }

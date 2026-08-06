@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
 export const prisma = new PrismaClient({
@@ -334,9 +335,13 @@ export async function autoplayOutlook(code: string) {
   };
 }
 
-// Inserts Smart Discovery suggestions as normal queue rows credited to DJ Autopilot, so
-// they inherit voting, removal, reordering, and fair-queue behavior for free.
-export async function addAutoplayTracks(code: string, items: Array<{ providerId: string; title: string; artist: string; thumbnail: string | null; url: string }>, reason: string) {
+type InsertableItem = { providerId: string; title: string; artist: string; thumbnail: string | null; url: string };
+type TrackCredit = { addedBy: string; addedByUserId: string; autoplayReason?: string };
+
+// Shared by DJ Autopilot suggestions and Connectify Library seeding: dedupes against
+// whatever the target room already has, bumps its revision optimistically, and inserts
+// the rest as normal Track rows crediting the given actor.
+async function insertCreditedTracks(code: string, items: InsertableItem[], credit: TrackCredit) {
   if (!items.length) return [];
   const room = await prisma.room.findUnique({ where: { code }, select: { id: true, revision: true } });
   if (!room) return [];
@@ -362,13 +367,47 @@ export async function addAutoplayTracks(code: string, items: Array<{ providerId:
           title: item.title,
           artist: item.artist,
           thumbnail: item.thumbnail,
-          addedBy: "DJ Autopilot",
-          addedByUserId: "autopilot",
           position: position++,
-          autoplayReason: reason,
+          ...credit,
         },
       }));
     }
     return created;
+  });
+}
+
+// Inserts Smart Discovery suggestions as normal queue rows credited to DJ Autopilot, so
+// they inherit voting, removal, reordering, and fair-queue behavior for free.
+export function addAutoplayTracks(code: string, items: InsertableItem[], reason: string) {
+  return insertCreditedTracks(code, items, { addedBy: "DJ Autopilot", addedByUserId: "autopilot", autoplayReason: reason });
+}
+
+// Inserts automated Connectify Library growth results the same way, credited separately
+// so they never show the "suggested for this room" tag real rooms use for Autopilot picks.
+export function addLibraryTracks(code: string, items: InsertableItem[]) {
+  return insertCreditedTracks(code, items, { addedBy: "Connectify Library", addedByUserId: "library-seed" });
+}
+
+const LIBRARY_ROOM_CODE = "LIBRAY";
+
+// The permanent, non-joinable system room whose discoverable tracks make up the
+// Connectify Library growth pool. Created once, locked, and never assigned a usable
+// host token so it can't be claimed or played from the normal join/socket paths.
+export async function ensureLibraryRoom() {
+  const existing = await prisma.room.findUnique({ where: { code: LIBRARY_ROOM_CODE } });
+  if (existing) return existing;
+  return prisma.room.create({
+    data: {
+      code: LIBRARY_ROOM_CODE,
+      name: "Connectify Library",
+      createdBy: "system",
+      hostTokenHash: randomBytes(32).toString("hex"),
+      discoverable: true,
+      autopilotEnabled: false,
+      guestsCanAdd: false,
+      guestsCanControl: false,
+      isLocked: true,
+      maxParticipants: 2,
+    },
   });
 }

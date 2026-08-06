@@ -163,6 +163,11 @@ model RoomActivity {
   @@index([roomId, createdAt])
 }
 
+model LibrarySeed {
+  query          String    @id
+  lastSearchedAt DateTime?
+}
+
 model SearchCache {
   key       String   @id
   query     String
