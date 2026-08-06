@@ -301,3 +301,74 @@ export async function refillAutoplay(code: string) {
   if (!committed) return null;
   return reviveIds.map((id) => byId.get(id)!).filter(Boolean);
 }
+
+// A read-only look at the autoplay buffer, used to decide whether Smart Discovery should
+// prepare fresh suggestions before the familiar revival pass runs.
+export async function autoplayOutlook(code: string) {
+  const room = await prisma.room.findUnique({
+    where: { code },
+    select: {
+      id: true,
+      autopilotEnabled: true,
+      autoplayMinBuffer: true,
+      autoplayFreshness: true,
+      currentTrackId: true,
+      tracks: {
+        orderBy: { position: "asc" },
+        select: { id: true, providerId: true, artist: true, votes: true, position: true, playedAt: true, removedAt: true, playNext: true, addedBy: true, addedByUserId: true },
+      },
+    },
+  });
+  if (!room || !room.autopilotEnabled || !room.currentTrackId) return null;
+  const active = room.tracks.filter((track) => !track.removedAt);
+  const upcoming = fairQueueOrder(active, room.currentTrackId);
+  const byId = new Map(active.map((track) => [track.id, track]));
+  return {
+    roomId: room.id,
+    need: Math.max(0, room.autoplayMinBuffer - upcoming.length),
+    freshness: room.autoplayFreshness,
+    upcomingArtists: upcoming.map((id) => byId.get(id)?.artist || "").filter(Boolean),
+    // Anything the room has ever had — queued, played, or removed — is off-limits for suggestions.
+    excludeProviderIds: new Set(room.tracks.map((track) => track.providerId)),
+    historySignals: active.map(({ artist, votes, playedAt }) => ({ artist, votes, playedAt })),
+  };
+}
+
+// Inserts Smart Discovery suggestions as normal queue rows credited to DJ Autopilot, so
+// they inherit voting, removal, reordering, and fair-queue behavior for free.
+export async function addAutoplayTracks(code: string, items: Array<{ providerId: string; title: string; artist: string; thumbnail: string | null; url: string }>, reason: string) {
+  if (!items.length) return [];
+  const room = await prisma.room.findUnique({ where: { code }, select: { id: true, revision: true } });
+  if (!room) return [];
+  const [existing, maxPosition] = await Promise.all([
+    prisma.track.findMany({ where: { roomId: room.id, providerId: { in: items.map((item) => item.providerId) } }, select: { providerId: true } }),
+    prisma.track.aggregate({ where: { roomId: room.id, removedAt: null }, _max: { position: true } }),
+  ]);
+  const taken = new Set(existing.map((track) => track.providerId));
+  const fresh = items.filter((item) => !taken.has(item.providerId));
+  if (!fresh.length) return [];
+  let position = (maxPosition._max.position ?? -1) + 1;
+  return prisma.$transaction(async (tx) => {
+    const bumped = await tx.room.updateMany({ where: { id: room.id, revision: room.revision }, data: { revision: { increment: 1 } } });
+    if (bumped.count !== 1) return [];
+    const created = [];
+    for (const item of fresh) {
+      created.push(await tx.track.create({
+        data: {
+          roomId: room.id,
+          url: item.url,
+          provider: "youtube",
+          providerId: item.providerId,
+          title: item.title,
+          artist: item.artist,
+          thumbnail: item.thumbnail,
+          addedBy: "DJ Autopilot",
+          addedByUserId: "autopilot",
+          position: position++,
+          autoplayReason: reason,
+        },
+      }));
+    }
+    return created;
+  });
+}

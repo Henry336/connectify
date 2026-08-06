@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDown, ArrowLeft, ArrowUp, Ban, Bell, BellOff, Check, CheckSquare, ChevronRight, Copy, Dna, EyeOff, Gamepad2, GripVertical, Heart, History, Info, KeyRound, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, Reply, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Square, Trash2, Undo2, UserMinus, UserRoundCheck, Users, Volume2, VolumeX, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
+import { Activity, ArrowDown, ArrowLeft, ArrowUp, Ban, Bell, BellOff, Check, CheckSquare, ChevronRight, Copy, Dna, EyeOff, Gamepad2, GripVertical, Heart, History, Info, Keyboard, KeyRound, Library, Link2, ListMusic, ListPlus, Lock, LogOut, Maximize2, MessageCircle, MoreHorizontal, Palette, Pause, Play, Plus, Radio, Reply, RotateCw, Search, Send, Share2, ShieldCheck, SkipBack, SkipForward, Sparkles, Square, Trash2, Undo2, UserMinus, UserRoundCheck, Users, Volume2, VolumeX, WandSparkles, Wifi, WifiOff, X, Youtube } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { api, API_URL, recordClientTiming, waitForBackend } from "./api";
-import { getHostToken, getIdentity, rememberRoom, removeHostToken, saveHostToken, saveIdentity } from "./identity";
+import { getHostToken, getIdentity, getRecentAdds, getRecentSearches, rememberRecentAdd, rememberRoom, rememberSearch, removeHostToken, saveHostToken, saveIdentity, type RecentAdd } from "./identity";
 import { effectivePosition, withReceipt } from "./playback";
 import type { ChatMessage, Moment, PartyMode, Person, Room, RoomActivity, RoomMember, RoomTheme, SearchItem, Track } from "./types";
 import { YouTubePlayer, type YouTubePlayerHandle } from "./YouTubePlayer";
@@ -19,6 +19,14 @@ function FeatureModal(props: { title: string; icon: React.ReactNode; onClose: ()
 const avatars = ["🌻", "🪩", "🎧", "🌙", "🛼", "✨"];
 const reactionChoices = ["🔥", "💜", "🥹", "🕺", "✨"] as const;
 const isYouTubeUrl = (value: string) => /^https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\//i.test(value.trim());
+const getClientPlaylistId = (value: string) => value.match(/[?&]list=([A-Za-z0-9_-]{10,64})/)?.[1] || null;
+const hasVideoInUrl = (value: string) => /[?&]v=[A-Za-z0-9_-]{11}|youtu\.be\/[A-Za-z0-9_-]{11}/.test(value);
+type OfflineCopy = {
+  savedAt: number; name: string; code: string; currentTrackId: string | null; queueOrder: string[];
+  tracks: Array<{ id: string; title: string; artist: string; addedBy: string }>;
+  messages: Array<{ id: string; name: string; body: string; createdAt: string }>;
+  memberCount: number;
+};
 const partyModes: Array<{ id: PartyMode; name: string; description: string }> = [
   { id: "standard", name: "Standard", description: "Fair shared queue with normal room controls." },
   { id: "pass_aux", name: "Pass the AUX", description: "Contributor turns are highlighted and rotated." },
@@ -45,6 +53,8 @@ const activityText = (event: Pick<RoomActivity, "actorName" | "action" | "target
     bulk_top: `moved${target} to the top`,
     bulk_bottom: `moved${target} to the bottom`,
     autoplay_revived: `revived ${event.target || "some"} song${event.target === "1" ? "" : "s"} from room history`,
+    autoplay_suggested: `suggested ${event.target || "some"} fresh song${event.target === "1" ? "" : "s"} for this room`,
+    imported_playlist: `imported ${event.target || "some"} song${event.target === "1" ? "" : "s"} from a playlist`,
   };
   return `${event.actorName} ${labels[event.action] || event.action.replaceAll("_", " ")}`;
 };
@@ -80,7 +90,13 @@ export function RoomPage({ code }: { code: string }) {
   const [url, setUrl] = useState("");
   const [filter, setFilter] = useState("");
   const [addingKeys, setAddingKeys] = useState<Set<string>>(() => new Set());
+  const [importing, setImporting] = useState(false);
   const chatSendingRef = useRef(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => getRecentSearches());
+  const [recentAdds, setRecentAdds] = useState<RecentAdd[]>(() => getRecentAdds());
+  const [offlineCopy, setOfflineCopy] = useState<OfflineCopy | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const [error, setError] = useState("");
   const [joinErrorCode, setJoinErrorCode] = useState<string | null>(null);
   const [joinNotice, setJoinNotice] = useState("");
@@ -116,7 +132,7 @@ export function RoomPage({ code }: { code: string }) {
   const [role, setRole] = useState<"host" | "guest">("guest");
   const [momentBursts, setMomentBursts] = useState<Moment[]>([]);
   const [placement, setPlacement] = useState<"last" | "next">("last");
-  const [sideTab, setSideTab] = useState<"queue" | "chat">("queue");
+  const [sideTab, setSideTab] = useState<"queue" | "chat">(() => localStorage.getItem("connectify.sideTab") === "chat" ? "chat" : "queue");
   const [chatBody, setChatBody] = useState(() => {
     try { return sessionStorage.getItem(`connectify.chatDraft.${code}`) || ""; }
     catch { return ""; }
@@ -158,6 +174,9 @@ export function RoomPage({ code }: { code: string }) {
   const seekTimerRef = useRef<number | null>(null);
   const playerRef = useRef<YouTubePlayerHandle | null>(null);
   const chatListRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastVolumeRef = useRef(72);
   const sideTabRef = useRef(sideTab);
   const chatAtBottomRef = useRef(chatAtBottom);
   const roomRef = useRef(room);
@@ -186,6 +205,42 @@ export function RoomPage({ code }: { code: string }) {
   useEffect(() => {
     localStorage.setItem("connectify.volume", String(volume));
   }, [volume]);
+
+  useEffect(() => {
+    localStorage.setItem("connectify.sideTab", sideTab);
+  }, [sideTab]);
+
+  // Keep a trimmed offline copy of the room so it stays browsable without a connection.
+  useEffect(() => {
+    if (!room) return;
+    try {
+      localStorage.setItem(`connectify.roomCache.${code}`, JSON.stringify({
+        savedAt: Date.now(),
+        name: room.name,
+        code: room.code,
+        currentTrackId: room.currentTrackId,
+        queueOrder: room.queueOrder,
+        tracks: room.tracks.map(({ id, title, artist, addedBy }) => ({ id, title, artist, addedBy })),
+        messages: room.messages.slice(-20).filter((message) => !message.spoiler).map(({ id, name, body, createdAt }) => ({ id, name, body, createdAt })),
+        memberCount: room.memberCount,
+      } satisfies OfflineCopy));
+    } catch { /* The offline copy is best-effort. */ }
+  }, [room?.revision, code]);
+
+  useEffect(() => {
+    const evaluate = () => {
+      if (navigator.onLine || roomRef.current) return;
+      try {
+        const raw = localStorage.getItem(`connectify.roomCache.${code}`);
+        if (raw) setOfflineCopy(JSON.parse(raw));
+      } catch { /* No saved copy to fall back to. */ }
+    };
+    evaluate();
+    const backOnline = () => setOfflineCopy(null);
+    window.addEventListener("offline", evaluate);
+    window.addEventListener("online", backOnline);
+    return () => { window.removeEventListener("offline", evaluate); window.removeEventListener("online", backOnline); };
+  }, [code]);
 
   useEffect(() => () => {
     if (seekTimerRef.current !== null) window.clearTimeout(seekTimerRef.current);
@@ -375,7 +430,7 @@ export function RoomPage({ code }: { code: string }) {
 
   useEffect(() => {
     const query = url.trim();
-    if (query.length < 2 || isYouTubeUrl(query)) { setLocalResults([]); if (!query) setSearchOpen(false); return; }
+    if (query.length < 2 || isYouTubeUrl(query)) { setLocalResults([]); if (!query && !getRecentSearches().length && !getRecentAdds().length) setSearchOpen(false); return; }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api<{ items: SearchItem[] }>(`/api/search/local?q=${encodeURIComponent(query)}&code=${code}`, { signal: controller.signal })
@@ -387,6 +442,7 @@ export function RoomPage({ code }: { code: string }) {
 
   const current = room?.tracks.find((track) => track.id === room.currentTrackId) ?? null;
   const isHost = role === "host";
+  const queuedProviderIds = useMemo(() => new Set(room?.tracks.filter((track) => !track.removedAt && !track.playedAt && track.providerId).map((track) => track.providerId) || []), [room?.tracks]);
   const canControl = isHost || Boolean(room?.guestsCanControl);
   const canAdd = isHost || Boolean(room?.guestsCanAdd);
   const orderedTracks = useMemo(() => room?.queueOrder.map((id) => room.tracks.find((track) => track.id === id)).filter((track): track is Track => Boolean(track)) ?? [], [room]);
@@ -615,12 +671,14 @@ export function RoomPage({ code }: { code: string }) {
           metadata: metadata ? { providerId: metadata.providerId, title: metadata.title, artist: metadata.artist, thumbnail: metadata.thumbnail, duration: metadata.duration } : undefined,
         }),
       });
+      const requestStartedAt = performance.now();
       let created: Track | { pending: true; operationId: string };
       try { created = await request(); }
       catch (requestError) {
         if (!(requestError instanceof TypeError)) throw requestError;
         created = await request();
       }
+      recordClientTiming("http:add-track-ack", performance.now() - requestStartedAt, { pending: "pending" in created });
       if ("pending" in created) {
         window.setTimeout(requestSync, 500);
         setPlacement("last");
@@ -634,6 +692,10 @@ export function RoomPage({ code }: { code: string }) {
         currentTrackId: previous.currentTrackId === pendingId ? created.id : (previous.currentTrackId || created.id),
       } : previous);
       setPlacement("last");
+      if (metadata) {
+        rememberRecentAdd({ providerId: metadata.providerId, title: metadata.title, artist: metadata.artist, thumbnail: metadata.thumbnail, url: metadata.url, duration: metadata.duration });
+        setRecentAdds(getRecentAdds());
+      }
       // Keep the search panel open after adding from results so listeners can queue several
       // in a row; only a pasted-URL add clears the composer and closes the panel.
       if (!metadata) { setUrl(""); setSearchOpen(false); setLocalResults([]); setYoutubeResults([]); setNextPageToken(null); setSearchError(""); }
@@ -642,10 +704,14 @@ export function RoomPage({ code }: { code: string }) {
       setRoom((previous) => previous ? { ...previous, tracks: previous.tracks.filter((track) => track.id !== pendingId), queueOrder: previous.queueOrder.filter((id) => id !== pendingId), currentTrackId: previous.currentTrackId === pendingId ? null : previous.currentTrackId } : previous);
       setError(err instanceof Error ? err.message : "Could not add that track.");
     }
-    finally { setAddingKeys((previous) => { const next = new Set(previous); next.delete(addKey); return next; }); }
+    finally {
+      setAddingKeys((previous) => { const next = new Set(previous); next.delete(addKey); return next; });
+      // Keep focus in the composer so the next search or paste starts immediately.
+      searchInputRef.current?.focus();
+    }
   };
-  const searchYouTube = async (loadMore = false) => {
-    const query = loadMore ? lastSearch : url.trim();
+  const searchYouTube = async (loadMore = false, overrideQuery?: string) => {
+    const query = overrideQuery ?? (loadMore ? lastSearch : url.trim());
     if (query.length < 2) return;
     loadMore ? setLoadingMore(true) : setSearching(true);
     setSearchOpen(true); setSearchError("");
@@ -654,15 +720,42 @@ export function RoomPage({ code }: { code: string }) {
       const result = await api<{ items: SearchItem[]; nextPageToken: string | null; cached: boolean }>(`/api/search/youtube?q=${encodeURIComponent(query)}${pageToken}`);
       setYoutubeResults((previous) => loadMore ? [...new Map([...previous, ...result.items].map((item) => [item.providerId, item])).values()] : result.items);
       setNextPageToken(result.nextPageToken); setLastSearch(query); setLiveCached(result.cached);
+      if (!loadMore && result.items.length) { rememberSearch(query); setRecentSearches(getRecentSearches()); }
     } catch (err) {
       if (!loadMore) setYoutubeResults([]);
       setSearchError(err instanceof Error ? err.message : "Live YouTube search is unavailable. You can still paste a URL.");
     } finally { setSearching(false); setLoadingMore(false); }
   };
+  const importPlaylist = async (targetUrl: string) => {
+    if (importing) return;
+    setImporting(true); setError("");
+    const startedAt = performance.now();
+    try {
+      const result = await api<{ added: number; skipped: number }>(`/api/rooms/${code}/playlist`, {
+        method: "POST",
+        body: JSON.stringify({ url: targetUrl, addedBy: identity.name, userId: identity.userId, operationId: newOperationId(), hostToken: getHostToken(code) }),
+      });
+      recordClientTiming("http:playlist-import", performance.now() - startedAt, { added: result.added, skipped: result.skipped });
+      setUrl(""); setSearchOpen(false);
+      // The room:queue broadcast normally lands first; this sync is a safety net.
+      window.setTimeout(requestSync, 600);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not import that playlist.");
+    } finally {
+      setImporting(false);
+      searchInputRef.current?.focus();
+    }
+  };
   const submitComposer = (event: React.FormEvent) => {
     event.preventDefault();
     if (!url.trim()) return;
-    if (isYouTubeUrl(url)) void addUrl(url);
+    if (isYouTubeUrl(url)) {
+      // A playlist link without a specific video imports the playlist; a watch link that
+      // merely carries a list= parameter still adds just that video.
+      const playlistId = getClientPlaylistId(url);
+      if (playlistId && !hasVideoInUrl(url)) { void importPlaylist(url); return; }
+      void addUrl(url);
+    }
     else void searchYouTube(false);
   };
   const copyInvite = async () => { await navigator.clipboard.writeText(window.location.href); setCopied(true); window.setTimeout(() => setCopied(false), 1800); };
@@ -739,7 +832,7 @@ export function RoomPage({ code }: { code: string }) {
   };
   const copyQueue = async () => { await navigator.clipboard.writeText(orderedTracks.map((track, index) => `${index + 1}. ${room?.partyMode === "blind_pick" && track.id !== room.currentTrackId ? `Mystery pick by ${track.addedBy}` : `${track.title} — ${track.artist}`}`).join("\n") || "Connectify queue is empty"); setQueueMenu(false); };
   const shareDna = async () => { await navigator.clipboard.writeText(`${room?.name || "Our room"} is a ${roomDna.vibe.toLowerCase()} — ${roomDna.contributors} contributors, ${roomDna.topArtist} on repeat, ${roomDna.love}% crowd love. ${window.location.href}`); setCopied(true); window.setTimeout(() => setCopied(false), 1800); };
-  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "autoplayMinBuffer" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "maxParticipants" | "chatSlowMode" | "discoverable">>) => {
+  const updateSettings = (settings: Partial<Pick<Room, "autopilotEnabled" | "autoplayMinBuffer" | "autoplayFreshness" | "partyMode" | "theme" | "isLocked" | "guestsCanControl" | "guestsCanAdd" | "maxSongsPerUser" | "maxParticipants" | "chatSlowMode" | "discoverable">>) => {
     setRoom((previous) => previous ? { ...previous, ...settings } : previous);
     socket?.emit("room:settings", settings, (result: { ok: boolean; error?: string }) => { if (!result?.ok) { requestSync(); setError(result?.error || "Could not update the room."); } });
   };
@@ -782,8 +875,10 @@ export function RoomPage({ code }: { code: string }) {
   const deliverChat = (message: ChatMessage) => {
     if (!socket) return;
     const operationId = message.operationId || newOperationId();
+    const startedAt = performance.now();
     setRoom((previous) => previous ? { ...previous, messages: previous.messages.map((item) => item.id === message.id ? { ...item, status: "sending" } : item) } : previous);
     emitReliable(socket, "room:chat", { body: message.body, spoiler: message.spoiler, trackId: message.trackId, position: message.position, replyToId: message.replyToId, operationId }, (result: { ok: boolean; error?: string }) => {
+      recordClientTiming("socket:room:chat", performance.now() - startedAt, { ok: Boolean(result?.ok) });
       // The server echo (matched by operationId) may already have marked this sent; don't undo it.
       setRoom((previous) => previous ? {
         ...previous,
@@ -815,6 +910,8 @@ export function RoomPage({ code }: { code: string }) {
     setChatBody(""); setChatSpoiler(false); setReplyingTo(null);
     window.setTimeout(() => { const list = chatListRef.current; if (list) list.scrollTop = list.scrollHeight; }, 0);
     deliverChat(optimistic);
+    // Keep focus in the composer so the conversation flows without re-clicking.
+    chatInputRef.current?.focus();
   };
   const retryChat = (message: ChatMessage) => {
     if (chatSendingRef.current) return;
@@ -944,6 +1041,68 @@ export function RoomPage({ code }: { code: string }) {
     };
   }, [current?.id, current?.title, current?.artist, current?.thumbnail, current?.duration, room?.name, room?.isPlaying, room?.revision, setPlayback, seekPlayback, skip]);
 
+  // A polite live region announces track changes for screen readers without echoing
+  // every synchronization update.
+  useEffect(() => {
+    if (current) setAnnouncement(`Now playing: ${current.title} by ${current.artist}`);
+  }, [current?.id]);
+
+  // Room-wide keyboard shortcuts. They stand down while typing, and while focus sits on
+  // a control where the key already has a meaning (buttons, links, dialogs).
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, button, a, [contenteditable=\"true\"], [role=\"dialog\"]")) return;
+      if (event.key === "?") { event.preventDefault(); setShortcutsOpen((open) => !open); return; }
+      const activeRoom = roomRef.current;
+      if (!activeRoom) return;
+      const activeTrack = activeRoom.tracks.find((track) => track.id === activeRoom.currentTrackId) || null;
+      switch (event.key === " " ? "space" : event.key.toLowerCase()) {
+        case "space":
+        case "k":
+          event.preventDefault();
+          if (activeTrack) setPlayback(activeTrack, !activeRoom.isPlaying, effectivePosition(activeRoom));
+          break;
+        case "n": skip(1); break;
+        case "p": skip(-1); break;
+        case "/": event.preventDefault(); searchInputRef.current?.focus(); break;
+        case "q": setSideTab("queue"); break;
+        case "c": setSideTab("chat"); break;
+        case "m":
+          setVolume((value) => {
+            if (value > 0) { lastVolumeRef.current = value; return 0; }
+            return lastVolumeRef.current || 72;
+          });
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setPlayback, skip]);
+
+  if (!room && offlineCopy) return <main className="room-loading">
+    <Brand />
+    <section className="offline-room">
+      <span className="offline-tag"><WifiOff /> Offline copy · saved {new Date(offlineCopy.savedAt).toLocaleString()}</span>
+      <h2>{offlineCopy.name}</h2>
+      <p>Room {offlineCopy.code} · {offlineCopy.memberCount} member{offlineCopy.memberCount === 1 ? "" : "s"}</p>
+      <div className="offline-queue">
+        {offlineCopy.queueOrder.map((id, index) => {
+          const track = offlineCopy.tracks.find((item) => item.id === id);
+          return track ? <div key={id} className={index === 0 ? "current" : ""}><span>{index === 0 ? <Play /> : index}</span><div><strong>{track.title}</strong><small>{track.artist} · Added by {track.addedBy}</small></div></div> : null;
+        })}
+        {!offlineCopy.queueOrder.length && <p className="section-help">The queue was empty when this copy was saved.</p>}
+      </div>
+      {offlineCopy.messages.length > 0 && <div className="offline-chat">
+        <h3><MessageCircle /> Recent chat</h3>
+        {offlineCopy.messages.map((message) => <p key={message.id}><strong>{message.name}</strong> {message.body}</p>)}
+      </div>}
+      <p className="section-help">Playback and chat need a connection. This saved copy keeps the room browsable meanwhile.</p>
+      <button className="secondary" onClick={() => window.location.reload()}>Try reconnecting</button>
+    </section>
+  </main>;
+
   if (!room) return <main className="room-loading">
     <Brand />
     {error ? <section className="loading-failure">
@@ -983,9 +1142,12 @@ export function RoomPage({ code }: { code: string }) {
         <div className="listeners"><div className="avatar-stack">{people.slice(0, 4).map((person, index) => <i key={person.id} title={`${person.name}${person.role === "host" ? " · Host" : ""}`}>{person.avatar || avatars[index]}</i>)}</div><span>{people.length} listening</span></div>
         <button className={`sync-pill ${connectionState !== "connected" || syncHealth.buffering ? "waiting" : syncHealth.correcting ? "correcting" : ""}`} onClick={resyncEveryone} disabled={!isHost || !current} title={isHost ? "Resync everyone" : "Playback synchronization health"}>{connectionState === "connected" ? <Wifi /> : <WifiOff />}<span>{connectionState !== "connected" ? "Reconnecting" : syncHealth.buffering ? "Buffering" : syncHealth.correcting ? "Correcting" : `In sync · ${Math.abs(syncHealth.drift).toFixed(1)}s`}</span></button>
         <button className="secondary" onClick={copyInvite}>{copied ? <Check size={17} /> : <Share2 size={17} />}{copied ? "Copied" : "Invite"}</button>
-        <div className="menu-wrap"><button className="icon-button" aria-label="Room options" aria-expanded={roomMenu} onClick={() => { setRoomMenu(!roomMenu); setQueueMenu(false); }}><MoreHorizontal /></button>{roomMenu && <div className="action-menu nav-menu"><button onClick={() => { setDnaOpen(true); setRoomMenu(false); }}><Dna />View Room DNA</button><button onClick={() => { setMembersOpen(true); setRoomMenu(false); if (!room.members.length) loadMembers(true); }}><Users />Room profile</button>{isHost ? <button onClick={() => { setHostOpen(true); setRoomMenu(false); if (!room.members.length) loadMembers(true); }}><ShieldCheck />Host controls</button> : <button onClick={() => { setRecoveryOpen(true); setRoomMenu(false); }}><KeyRound />Recover host access</button>}<button onClick={() => { void navigator.clipboard.writeText(room.code); setCopied(true); window.setTimeout(() => setCopied(false), 1800); setRoomMenu(false); }}><Copy />Copy room code</button><button onClick={() => { window.location.href = "/"; }}><LogOut />Leave room</button></div>}</div>
+        <div className="menu-wrap"><button className="icon-button" aria-label="Room options" aria-expanded={roomMenu} onClick={() => { setRoomMenu(!roomMenu); setQueueMenu(false); }}><MoreHorizontal /></button>{roomMenu && <div className="action-menu nav-menu"><button onClick={() => { setDnaOpen(true); setRoomMenu(false); }}><Dna />View Room DNA</button><button onClick={() => { setMembersOpen(true); setRoomMenu(false); if (!room.members.length) loadMembers(true); }}><Users />Room profile</button>{isHost ? <button onClick={() => { setHostOpen(true); setRoomMenu(false); if (!room.members.length) loadMembers(true); }}><ShieldCheck />Host controls</button> : <button onClick={() => { setRecoveryOpen(true); setRoomMenu(false); }}><KeyRound />Recover host access</button>}<button onClick={() => { setShortcutsOpen(true); setRoomMenu(false); }}><Keyboard />Keyboard shortcuts</button><button onClick={() => { void navigator.clipboard.writeText(room.code); setCopied(true); window.setTimeout(() => setCopied(false), 1800); setRoomMenu(false); }}><Copy />Copy room code</button><button onClick={() => { window.location.href = "/"; }}><LogOut />Leave room</button></div>}</div>
       </div>
     </header>
+
+    <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
+    {connectionState === "reconnecting" && <div className="reconnect-strip" role="status"><WifiOff />Reconnecting — controls stay usable and your changes sync when the room is back.</div>}
 
     <section className="room-content">
       <div className="listening-pane">
@@ -1020,12 +1182,16 @@ export function RoomPage({ code }: { code: string }) {
         </div>
 
         <div className="search-shell">
-          <form className="add-bar search-bar" onSubmit={submitComposer}><span className="provider-icon"><Search /></span><input type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => url.trim().length >= 2 && !isYouTubeUrl(url) && setSearchOpen(true)} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={addingKeys.has(url.trim()) || searching || !url.trim() || !canAdd}>{isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}{addingKeys.has(url.trim()) ? "Adding…" : searching ? "Searching…" : isYouTubeUrl(url) ? placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</button></form>
+          <form className="add-bar search-bar" onSubmit={submitComposer}><span className="provider-icon"><Search /></span><input ref={searchInputRef} type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => { const query = url.trim(); if ((query.length >= 2 && !isYouTubeUrl(url)) || (!query && (recentSearches.length > 0 || recentAdds.length > 0))) setSearchOpen(true); }} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={addingKeys.has(url.trim()) || importing || searching || !url.trim() || !canAdd}>{isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}{addingKeys.has(url.trim()) ? "Adding…" : importing ? "Importing…" : searching ? "Searching…" : isYouTubeUrl(url) ? getClientPlaylistId(url) && !hasVideoInUrl(url) ? "Import playlist" : placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</button></form>
           {searchOpen && !isYouTubeUrl(url) && <section className="search-results" aria-live="polite">
             <header><div><strong>Find something to play</strong><span>Library results are instant. Live YouTube search uses cached results whenever possible.</span></div><button className="icon-button" onClick={() => setSearchOpen(false)} aria-label="Close search"><X /></button></header>
-            {localResults.length > 0 && <div className="search-group"><div className="search-group-title"><Library /><strong>Connectify Library</strong><span>{localResults.length} matches</span></div><div className="search-grid">{localResults.map((item) => <SearchResult key={`local-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} onAdd={addUrl} />)}</div></div>}
-            {(searching || youtubeResults.length > 0 || searchError) && <div className="search-group"><div className="search-group-title"><Youtube /><strong>Live YouTube</strong>{liveCached && !searching && <span>Cached</span>}</div>{searching ? <div className="search-loading"><i /><span>Searching YouTube…</span></div> : <><div className="search-grid">{youtubeResults.map((item) => <SearchResult key={`youtube-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} onAdd={addUrl} />)}</div>{searchError && <div className="search-error"><span>{searchError}</span><small>Paste a YouTube URL above to keep going.</small></div>}{nextPageToken && <button className="load-more" onClick={() => void searchYouTube(true)} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load 25 more results"}</button>}<p className="youtube-attribution">Results provided by YouTube. By using live search, you agree to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms of Service</a>.</p></>}</div>}
-            {!searching && localResults.length === 0 && youtubeResults.length === 0 && !searchError && <div className="search-prompt"><Search /><strong>Search the wider catalog</strong><span>Press Enter or choose “Search YouTube.” Results load 25 at a time, and you can keep loading more.</span></div>}
+            {!url.trim() && (recentSearches.length > 0 || recentAdds.length > 0) && <div className="search-group">
+              {recentSearches.length > 0 && <><div className="search-group-title"><History /><strong>Recent searches</strong></div><div className="recent-search-chips">{recentSearches.map((query) => <button key={query} type="button" onClick={() => { setUrl(query); void searchYouTube(false, query); }}>{query}</button>)}</div></>}
+              {recentAdds.length > 0 && <><div className="search-group-title"><Plus /><strong>Recently added</strong></div><div className="search-grid">{recentAdds.map((item) => <SearchResult key={`recent-${item.providerId}`} item={{ ...item, source: "connectify" }} canControl={canControl} adding={addingKeys.has(item.providerId)} queued={queuedProviderIds.has(item.providerId)} onAdd={addUrl} />)}</div></>}
+            </div>}
+            {localResults.length > 0 && <div className="search-group"><div className="search-group-title"><Library /><strong>Connectify Library</strong><span>{localResults.length} matches</span></div><div className="search-grid">{localResults.map((item) => <SearchResult key={`local-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} queued={queuedProviderIds.has(item.providerId)} onAdd={addUrl} />)}</div></div>}
+            {(searching || youtubeResults.length > 0 || searchError) && <div className="search-group"><div className="search-group-title"><Youtube /><strong>Live YouTube</strong>{liveCached && !searching && <span>Cached</span>}</div>{searching ? <div className="search-loading"><i /><span>Searching YouTube…</span></div> : <><div className="search-grid">{youtubeResults.map((item) => <SearchResult key={`youtube-${item.providerId}`} item={item} canControl={canControl} adding={addingKeys.has(item.providerId)} queued={queuedProviderIds.has(item.providerId)} onAdd={addUrl} />)}</div>{searchError && <div className="search-error"><span>{searchError}</span><small>Paste a YouTube URL above to keep going.</small></div>}{nextPageToken && <button className="load-more" onClick={() => void searchYouTube(true)} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load 25 more results"}</button>}<p className="youtube-attribution">Results provided by YouTube. By using live search, you agree to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms of Service</a>.</p></>}</div>}
+            {!searching && url.trim().length >= 2 && localResults.length === 0 && youtubeResults.length === 0 && !searchError && <div className="search-prompt"><Search /><strong>Search the wider catalog</strong><span>Press Enter or choose “Search YouTube.” Results load 25 at a time, and you can keep loading more.</span></div>}
           </section>}
         </div>
         {error && <div className="inline-error"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -1052,7 +1218,7 @@ export function RoomPage({ code }: { code: string }) {
             return <article key={track.id} data-track-id={track.id} draggable={canControl && !active && !selectionMode} onDragStart={() => setDraggingTrackId(track.id)} onDragOver={(event) => { event.preventDefault(); setDragOverTrackId(track.id); }} onDrop={() => { if (draggingTrackId) moveToTrack(draggingTrackId, track.id); setDraggingTrackId(null); setDragOverTrackId(null); }} onDragEnd={() => { setDraggingTrackId(null); setDragOverTrackId(null); }} className={`queue-item ${active ? "active" : ""} ${track.pending ? "pending" : ""} ${selectedTrackIds.has(track.id) ? "selected" : ""} ${draggingTrackId === track.id ? "dragging" : ""} ${dragOverTrackId === track.id ? "drag-over" : ""}`}>
               {selectionMode && !active ? <button className="queue-select" onClick={() => setSelectedTrackIds((previous) => { const next = new Set(previous); next.has(track.id) ? next.delete(track.id) : next.add(track.id); return next; })} aria-label={`Select ${track.title}`}>{selectedTrackIds.has(track.id) ? <CheckSquare /> : <Square />}</button> : canControl && !active && <button className="queue-drag-handle" onPointerDown={(event) => beginTouchDrag(track.id, event)} aria-label={`Drag to reorder ${track.title}`} title="Drag to reorder"><GripVertical /></button>}
               <button className={`queue-thumb ${blind ? "blind" : ""}`} onClick={() => setPlayback(track, true, 0)} disabled={!canControl || blind || track.pending} aria-label={blind ? "Hidden Blind Pick" : `Play ${track.title}`}>{blind ? <EyeOff /> : track.thumbnail ? <img src={track.thumbnail} alt="" /> : <RotateCw />}<span>{active && room.isPlaying ? <i className="equalizer"><b /><b /><b /></i> : <Play size={15} fill="currentColor" />}</span></button>
-              <div className="queue-meta"><strong>{blind ? "Mystery pick" : track.title}</strong><span>{blind ? "Revealed when it starts" : track.artist}</span><small>{active ? "Playing now" : track.playNext ? "Pinned to play next" : `In ~${Math.max(1, Math.round((etaByTrack.get(track.id) || 0) / 60))} min · Around ${clockEta(etaByTrack.get(track.id) || 0)}`} · Added by {track.addedBy}</small></div>
+              <div className="queue-meta"><strong>{blind ? "Mystery pick" : track.title}</strong><span>{blind ? "Revealed when it starts" : track.artist}</span><small>{active ? "Playing now" : track.playNext ? "Pinned to play next" : `In ~${Math.max(1, Math.round((etaByTrack.get(track.id) || 0) / 60))} min · Around ${clockEta(etaByTrack.get(track.id) || 0)}`} · {track.addedByUserId === "autopilot" ? <em className="suggested-tag"><Sparkles /> {track.autoplayReason || "Suggested for this room"}</em> : `Added by ${track.addedBy}`}</small></div>
               <div className="queue-actions"><button className={votedTrackIds.has(track.id) ? "voted" : ""} onClick={() => vote(track.id)} disabled={votedTrackIds.has(track.id) || track.pending} title={votedTrackIds.has(track.id) ? "Already voted" : "Vote up"}><Heart size={14} fill={votedTrackIds.has(track.id) ? "currentColor" : "none"} />{track.votes || ""}</button><button onClick={() => move(track, -1)} disabled={!canControl || active || pendingIndex <= 0 || track.pending} title="Move up"><ArrowUp size={14} /></button><button onClick={() => move(track, 1)} disabled={!canControl || active || pendingIndex < 0 || pendingIndex === pendingCount - 1 || track.pending} title="Move down"><ArrowDown size={14} /></button><button onClick={() => removeTrack(track)} disabled={!canControl || track.pending || (room.partyMode === "one_take" && active)} title="Remove"><Trash2 size={14} /></button></div>
             </article>;
           })}
@@ -1068,7 +1234,7 @@ export function RoomPage({ code }: { code: string }) {
           {(!chatAtBottom || unreadChat > 0) && <button className="jump-latest-chat" onClick={jumpToLatestChat}>{unreadChat ? `${unreadChat} new message${unreadChat === 1 ? "" : "s"}` : "Jump to latest"}<ArrowDown /></button>}
           <form className="chat-compose" onSubmit={sendChat}>
             {replyingTo && <div className="replying-to"><Reply /><span><strong>Replying to {replyingTo.name}</strong><small>{replyingTo.spoiler ? "Spoiler-hidden message" : replyingTo.body}</small></span><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply"><X /></button></div>}
-            <textarea value={chatBody} onChange={(event) => setChatBody(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={300} placeholder="Say something about this moment… (Enter to send, Shift+Enter for a new line)" />
+            <textarea ref={chatInputRef} value={chatBody} onChange={(event) => setChatBody(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={300} placeholder="Say something about this moment… (Enter to send, Shift+Enter for a new line)" />
             {mentionSuggestions.length > 0 && <div className="mention-suggestions">{mentionSuggestions.map((name) => <button type="button" key={name} onClick={() => insertMention(name)}>@{name}</button>)}</div>}
             <div><label><input type="checkbox" checked={chatSpoiler} onChange={(event) => setChatSpoiler(event.target.checked)} /> Hide as spoiler</label><button disabled={!chatBody.trim()} aria-label="Send message"><Send /></button></div>
           </form>
@@ -1088,7 +1254,7 @@ export function RoomPage({ code }: { code: string }) {
     {partyOpen && <FeatureModal title="Party Modes" icon={<Gamepad2 />} onClose={() => setPartyOpen(false)}><p className="modal-intro">Change the rules for everyone in this persistent room.</p><div className="party-grid">{partyModes.map((mode) => <button key={mode.id} className={room.partyMode === mode.id ? "active" : ""} disabled={!isHost} onClick={() => { updateSettings({ partyMode: mode.id }); setPartyOpen(false); }}><span>{mode.id === "blind_pick" ? <EyeOff /> : mode.id === "one_take" ? <Lock /> : mode.id === "discovery" ? <Sparkles /> : <Gamepad2 />}</span><strong>{mode.name}</strong><small>{mode.description}</small>{room.partyMode === mode.id && <Check />}</button>)}</div>{!isHost && <p className="permission-note">Only the host can change the active mode.</p>}</FeatureModal>}
     {membersOpen && <FeatureModal title="Room Profile" icon={<Users />} onClose={() => setMembersOpen(false)}><div className="room-profile-card"><span>PERMANENT ROOM</span><strong>{room.name}</strong><p>Room {room.code} · Created {new Date(room.createdAt).toLocaleDateString()}</p><button onClick={copyInvite}><Link2 />{copied ? "Link copied" : "Copy permanent room link"}</button></div><div className="profile-section"><h3><Users /> Members <small>{room.memberCount ?? room.members.length}</small></h3><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Host" : `Last seen ${new Date(member.lastSeenAt).toLocaleDateString()}`}</small></span>{member.role === "host" && <b>HOST</b>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div><div className="profile-section"><h3><Palette /> Room theme</h3><div className="theme-picker">{(["violet", "sunset", "ocean", "mono"] as RoomTheme[]).map((theme) => <button key={theme} className={`${theme} ${room.theme === theme ? "active" : ""}`} disabled={!isHost} onClick={() => updateSettings({ theme })} title={theme}><i /></button>)}</div></div></FeatureModal>}
     {historyOpen && <FeatureModal title="Listening History" icon={<History />} onClose={() => setHistoryOpen(false)}>{historyTracks.length ? <><div className="history-list">{historyTracks.map((track, index) => <div key={track.id} className="history-row"><button disabled={!canControl} onClick={() => { setRoom((previous) => previous && !previous.tracks.some((item) => item.id === track.id) ? { ...previous, tracks: [...previous.tracks, track] } : previous); setPlayback(track, true, 0); setHistoryOpen(false); }}><span>{index + 1}</span><img src={track.thumbnail || ""} alt="" /><div><strong>{track.title}</strong><small>{track.artist} · Added by {track.addedBy}</small></div><Play /></button>{canControl && <button className="history-block" onClick={() => blockAutoplay(track)} title="Never autoplay this song again"><Ban /></button>}</div>)}</div>{historyHasMore && <button className="load-page" onClick={() => loadHistory(false)}>Load more history</button>}</> : historyLoading ? <p className="page-loading">Loading listening history…</p> : <div className="modal-empty"><History /><strong>No listening history yet</strong><span>Finished and skipped songs will stay here for returning members.</span></div>}</FeatureModal>}
-    {hostOpen && <FeatureModal title="Host Controls" icon={<ShieldCheck />} onClose={() => setHostOpen(false)}><p className="modal-intro">These rules are enforced by the room server.</p><div className="recovery-card"><KeyRound /><div><strong>Room recovery key</strong><span>Save this somewhere private. It restores host access on another device.</span></div><button onClick={() => void copyRecoveryKey()}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy key"}</button></div><div className="host-settings"><button onClick={() => updateSettings({ isLocked: !room.isLocked })}><span><Lock /><b>Lock room</b><small>Only returning members can join.</small></span><i className={room.isLocked ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanControl: !room.guestsCanControl })}><span><Play /><b>Guest playback controls</b><small>Allow guests to play, seek, skip, and reorder.</small></span><i className={room.guestsCanControl ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanAdd: !room.guestsCanAdd })}><span><Plus /><b>Guest song submissions</b><small>Allow guests to add URLs to the queue.</small></span><i className={room.guestsCanAdd ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ autopilotEnabled: !room.autopilotEnabled })}><span><WandSparkles /><b>Smart Autoplay</b><small>Keep the music going by reviving this room’s favorites when the queue runs low.</small></span><i className={room.autopilotEnabled ? "toggle on" : "toggle"} /></button><label><span><RotateCw /><b>Autoplay buffer</b><small>Upcoming songs Autopilot keeps ready before the current one ends.</small></span><select value={room.autoplayMinBuffer} onChange={(event) => updateSettings({ autoplayMinBuffer: Number(event.target.value) })}>{[3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><button onClick={() => updateSettings({ discoverable: !room.discoverable })}><span><Library /><b>Contribute to Connectify Library</b><small>Let video metadata from this room appear in Connectify Library search. Room and member details stay private. Independent of Smart Autoplay.</small></span><i className={room.discoverable ? "toggle on" : "toggle"} /></button><label><span><ListMusic /><b>Upcoming songs per guest</b><small>Prevents one listener from flooding the queue.</small></span><select value={room.maxSongsPerUser} onChange={(event) => updateSettings({ maxSongsPerUser: Number(event.target.value) })}>{[1,2,3,5,8,10,15,20].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><div className="profile-section moderation"><h3><Users /> Members and host handoff</h3><p className="section-help">Handoff rotates the recovery key and works only for someone currently online.</p><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Room host" : people.some((person) => person.userId === member.userId) ? "Online" : "Offline"}</small></span>{member.role === "guest" && <div className="member-actions">{people.some((person) => person.userId === member.userId) && <button className="handoff" onClick={() => handoffHost(member)} title={`Make ${member.name} the host`}><UserRoundCheck /></button>}<button onClick={() => kickMember(member.id, member.name)} title={`Remove ${member.name}`}><UserMinus /></button></div>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div></FeatureModal>}
+    {hostOpen && <FeatureModal title="Host Controls" icon={<ShieldCheck />} onClose={() => setHostOpen(false)}><p className="modal-intro">These rules are enforced by the room server.</p><div className="recovery-card"><KeyRound /><div><strong>Room recovery key</strong><span>Save this somewhere private. It restores host access on another device.</span></div><button onClick={() => void copyRecoveryKey()}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy key"}</button></div><div className="host-settings"><button onClick={() => updateSettings({ isLocked: !room.isLocked })}><span><Lock /><b>Lock room</b><small>Only returning members can join.</small></span><i className={room.isLocked ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanControl: !room.guestsCanControl })}><span><Play /><b>Guest playback controls</b><small>Allow guests to play, seek, skip, and reorder.</small></span><i className={room.guestsCanControl ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ guestsCanAdd: !room.guestsCanAdd })}><span><Plus /><b>Guest song submissions</b><small>Allow guests to add URLs to the queue.</small></span><i className={room.guestsCanAdd ? "toggle on" : "toggle"} /></button><button onClick={() => updateSettings({ autopilotEnabled: !room.autopilotEnabled })}><span><WandSparkles /><b>Smart Autoplay</b><small>Keep the music going by reviving this room’s favorites when the queue runs low.</small></span><i className={room.autopilotEnabled ? "toggle on" : "toggle"} /></button><label><span><RotateCw /><b>Autoplay buffer</b><small>Upcoming songs Autopilot keeps ready before the current one ends.</small></span><select value={room.autoplayMinBuffer} onChange={(event) => updateSettings({ autoplayMinBuffer: Number(event.target.value) })}>{[3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="freshness-setting"><span><Sparkles /><b>Familiar ↔ Fresh</b><small>How adventurous Smart Autoplay gets: room favorites only, or new finds from artists this room loves. Fresh finds need live search.</small></span><input type="range" min={0} max={100} step={10} value={room.autoplayFreshness} onChange={(event) => updateSettings({ autoplayFreshness: Number(event.target.value) })} aria-label="Familiar to fresh balance" /></label><button onClick={() => updateSettings({ discoverable: !room.discoverable })}><span><Library /><b>Contribute to Connectify Library</b><small>Let video metadata from this room appear in Connectify Library search. Room and member details stay private. Independent of Smart Autoplay.</small></span><i className={room.discoverable ? "toggle on" : "toggle"} /></button><label><span><ListMusic /><b>Upcoming songs per guest</b><small>Prevents one listener from flooding the queue.</small></span><select value={room.maxSongsPerUser} onChange={(event) => updateSettings({ maxSongsPerUser: Number(event.target.value) })}>{[1,2,3,5,8,10,15,20].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><div className="profile-section moderation"><h3><Users /> Members and host handoff</h3><p className="section-help">Handoff rotates the recovery key and works only for someone currently online.</p><div className="member-list">{room.members.map((member) => <div key={member.id}><i>{member.avatar}</i><span><strong>{member.name}</strong><small>{member.role === "host" ? "Room host" : people.some((person) => person.userId === member.userId) ? "Online" : "Offline"}</small></span>{member.role === "guest" && <div className="member-actions">{people.some((person) => person.userId === member.userId) && <button className="handoff" onClick={() => handoffHost(member)} title={`Make ${member.name} the host`}><UserRoundCheck /></button>}<button onClick={() => kickMember(member.id, member.name)} title={`Remove ${member.name}`}><UserMinus /></button></div>}</div>)}</div>{membersLoading && <p className="page-loading">Loading members…</p>}{membersHasMore && <button className="load-page" onClick={() => loadMembers(false)}>Load more members</button>}</div></FeatureModal>}
     {moderationOpen && <FeatureModal title="Listener moderation" icon={<UserMinus />} onClose={() => setModerationOpen(false)}>
       <p className="modal-intro">Removing disconnects someone now; blocking prevents this guest identity from rejoining until you unblock it.</p>
       <div className="moderation-groups">
@@ -1106,6 +1272,7 @@ export function RoomPage({ code }: { code: string }) {
         </section>
       </div>
     </FeatureModal>}
+    {shortcutsOpen && <FeatureModal title="Keyboard shortcuts" icon={<Keyboard />} onClose={() => setShortcutsOpen(false)}><div className="shortcut-list">{([["Space / K", "Play or pause"], ["N", "Next song"], ["P", "Previous song"], ["/", "Focus search"], ["Q", "Queue tab"], ["C", "Chat tab"], ["M", "Mute or unmute"], ["?", "Toggle this panel"]] as const).map(([keys, label]) => <div key={keys}><kbd>{keys}</kbd><span>{label}</span></div>)}</div><p className="permission-note">Shortcuts pause automatically while you type or when a button has focus.</p></FeatureModal>}
     {recoveryOpen && <FeatureModal title="Recover Host Access" icon={<KeyRound />} onClose={() => setRecoveryOpen(false)}><p className="modal-intro">Paste the private recovery key saved by the room host. Recovering access makes this device the host and demotes the previous host.</p><form className="recover-host-form" onSubmit={recoverHost}><input value={recoveryInput} onChange={(event) => setRecoveryInput(event.target.value)} placeholder="Room recovery key" autoComplete="off" /><button className="primary" disabled={!recoveryInput.trim()}><KeyRound />Recover room</button></form></FeatureModal>}
   </main>;
 }

@@ -19,6 +19,7 @@ model Room {
   startedAt        DateTime?
   autopilotEnabled Boolean  @default(true)
   autoplayMinBuffer Int     @default(4)
+  autoplayFreshness Int     @default(30)
   partyMode        String   @default("standard")
   theme            String   @default("violet")
   isLocked         Boolean  @default(false)
@@ -59,6 +60,7 @@ model Track {
   removedBy  String?
   playNext   Boolean  @default(false)
   autoplayBlocked Boolean @default(false)
+  autoplayReason  String?
   createdAt  DateTime @default(now())
   trackVotes TrackVote[]
   moments    Moment[]

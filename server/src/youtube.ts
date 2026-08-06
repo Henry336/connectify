@@ -44,6 +44,21 @@ export function getYouTubeId(value: string): string | null {
   }
 }
 
+export function getPlaylistId(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
+    if (host !== "youtube.com" && host !== "youtu.be") return null;
+    const id = url.searchParams.get("list");
+    return id && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+// YouTube Mixes (RD…) are generated per viewer; the Data API cannot enumerate them.
+export const isMixPlaylist = (playlistId: string) => /^RD/.test(playlistId);
+
 export async function resolveTrack(value: string, provided?: ProvidedTrackMetadata): Promise<ResolvedTrack> {
   const providerId = getYouTubeId(value);
   if (!providerId) throw new Error("Paste a valid YouTube video or music URL.");

@@ -31,6 +31,8 @@ type SyncReport = { drift: number; correcting: boolean; buffering: boolean };
 const STARTUP_GRACE_MS = 2_500;
 // Fatal player errors that mean the video will never play and the room should move on.
 const FATAL_ERROR_CODES = new Set([2, 5, 100, 101, 150]);
+// Data Saver connections skip the standby preload player entirely.
+const saveData = typeof navigator !== "undefined" && (navigator as any).connection?.saveData === true;
 
 // Lightweight, listenable instrumentation for player state transitions so background
 // jitter reports are diagnosable after the fact (see docs multi-device test matrix).
@@ -99,6 +101,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, {
 
   // Warm the next track in a hidden, muted player so the real transition loads faster.
   const maybePreloadNext = () => {
+    if (saveData) return;
     const player = preloadRef.current;
     const currentRoom = roomRef.current;
     const currentTrack = trackRef.current;
@@ -221,7 +224,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, {
           },
         },
       });
-      if (preloadMountRef.current) {
+      if (preloadMountRef.current && !saveData) {
         const preTarget = document.createElement("div");
         preloadMountRef.current.replaceChildren(preTarget);
         preloadRef.current = new window.YT.Player(preTarget, {
