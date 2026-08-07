@@ -603,6 +603,13 @@ input[type="range"]:hover::-webkit-slider-thumb { opacity: 1; }
   .queue-header { padding: 24px 18px 16px; }
   .queue-search { margin-left: 18px; margin-right: 18px; }
   .queue-list { padding: 0 8px 90px; }
+  /* The Chat tab never got the same bottom clearance the Queue tab already has above --
+     the fixed mobile-player bar sits over the last ~82px of the screen whenever a track
+     is playing, and nothing kept the composer clear of it. Scoped to :has(.mobile-player)
+     rather than applied unconditionally: the player only renders when there's a current
+     track, so an unconditional margin would leave an unexplained empty gap under the
+     composer whenever the room is empty -- the same kind of bug being fixed here. */
+  .room-shell:has(.mobile-player) .chat-compose { margin-bottom: 90px; }
   .queue-actions { opacity: 1; flex-direction: row; }
   .queue-actions button:nth-child(2), .queue-actions button:nth-child(3) { display: none; }
   .mobile-player { position: fixed; z-index: 20; left: 8px; right: 8px; bottom: 8px; height: 66px; padding: 7px; display: grid; grid-template-columns: 50px minmax(0,1fr) 42px 35px; align-items: center; gap: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(28,24,36,.94); backdrop-filter: blur(20px); box-shadow: 0 12px 40px rgba(0,0,0,.5); }

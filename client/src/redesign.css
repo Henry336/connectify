@@ -479,6 +479,15 @@ textarea { font: inherit; }
   .queue-pane.chat-pane { position: relative; top: auto; height: min(680px, calc(100dvh - 24px)); max-height: none; }
 }
 
+/* Matches the 900px breakpoint where styles.css collapses .benefits to a single column.
+   The 30ch cap on .benefits p below is tuned for the desktop 3-column grid, where each
+   column is already narrow -- once mobile stacks into one full-width column, that same
+   cap left each paragraph stopping partway across the row with nothing explaining the
+   gap. It read as unintentional rather than a deliberate line length. */
+@media (max-width: 900px) {
+  .benefits p { max-width: none; }
+}
+
 @media (max-width: 720px) {
   .landing-nav { padding-inline: 18px; }
   .benefits { gap: 36px; }
