@@ -7,7 +7,12 @@
     <meta name="robots" content="noindex, nofollow" />
     <meta name="description" content="Connectify — free synchronized YouTube listening rooms and watch parties." />
     <link rel="icon" type="image/svg+xml" href="/connectify.svg" />
-    <link rel="apple-touch-icon" href="/connectify.svg" />
+    <!-- iOS ignores the SVG icon and wants a full-bleed opaque PNG (it applies its own
+         rounded-corner mask on top). connectify.svg has an inset, already-rounded
+         background meant for in-app use, which is exactly what produced the visible
+         whitespace/halo around the home-screen icon; SVG rasterization for this specific
+         tag is also inconsistent across iOS versions, which was the separate blurriness. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="mask-icon" href="/connectify-mono.svg" color="#502d55" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <!-- Without these, adding Connectify to an iPhone home screen still opens it inside
