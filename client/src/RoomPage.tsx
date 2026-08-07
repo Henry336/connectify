@@ -1182,7 +1182,22 @@ export function RoomPage({ code }: { code: string }) {
         </div>
 
         <div className="search-shell">
-          <form className="add-bar search-bar" onSubmit={submitComposer}><span className="provider-icon"><Search /></span><input ref={searchInputRef} type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => { const query = url.trim(); if ((query.length >= 2 && !isYouTubeUrl(url)) || (!query && (recentSearches.length > 0 || recentAdds.length > 0))) setSearchOpen(true); }} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />{canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}<button disabled={addingKeys.has(url.trim()) || importing || searching || !url.trim() || !canAdd}>{isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}{addingKeys.has(url.trim()) ? "Adding…" : importing ? "Importing…" : searching ? "Searching…" : isYouTubeUrl(url) ? getClientPlaylistId(url) && !hasVideoInUrl(url) ? "Import playlist" : placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</button></form>
+          <form className="add-bar search-bar" onSubmit={submitComposer}>
+            <div className="search-bar-field">
+              {/* Reflects what's actually typed rather than mirroring the button's icon, so the
+                  two never show the same glyph at once (a plain text query used to show a
+                  magnifying glass on both sides). */}
+              <span className="provider-icon">{isYouTubeUrl(url) ? <Youtube /> : <Link2 />}</span>
+              <input ref={searchInputRef} type="text" value={url} onChange={(event) => setUrl(event.target.value)} onFocus={() => { const query = url.trim(); if ((query.length >= 2 && !isYouTubeUrl(url)) || (!query && (recentSearches.length > 0 || recentAdds.length > 0))) setSearchOpen(true); }} placeholder={canAdd ? "Search music or videos, or paste a YouTube URL…" : "The host paused guest submissions"} aria-label="Search or paste a YouTube URL" disabled={!canAdd} autoComplete="off" />
+            </div>
+            <div className="search-bar-actions">
+              {canControl && <select value={placement} onChange={(event) => setPlacement(event.target.value as "last" | "next")} aria-label="Queue placement"><option value="last">Add last</option><option value="next">Play next</option></select>}
+              <button disabled={addingKeys.has(url.trim()) || importing || searching || !url.trim() || !canAdd} aria-label={addingKeys.has(url.trim()) ? "Adding" : importing ? "Importing" : searching ? "Searching" : isYouTubeUrl(url) ? getClientPlaylistId(url) && !hasVideoInUrl(url) ? "Import playlist" : placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}>
+                {isYouTubeUrl(url) ? placement === "next" ? <ListPlus size={19} /> : <Plus size={19} /> : <Search size={19} />}
+                <span>{addingKeys.has(url.trim()) ? "Adding…" : importing ? "Importing…" : searching ? "Searching…" : isYouTubeUrl(url) ? getClientPlaylistId(url) && !hasVideoInUrl(url) ? "Import playlist" : placement === "next" ? "Play next" : "Add to queue" : "Search YouTube"}</span>
+              </button>
+            </div>
+          </form>
           {searchOpen && !isYouTubeUrl(url) && <section className="search-results" aria-live="polite">
             <header><div><strong>Find something to play</strong><span>Library results are instant. Live YouTube search uses cached results whenever possible.</span></div><button className="icon-button" onClick={() => setSearchOpen(false)} aria-label="Close search"><X /></button></header>
             {!url.trim() && (recentSearches.length > 0 || recentAdds.length > 0) && <div className="search-group">
