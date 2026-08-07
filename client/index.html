@@ -10,6 +10,12 @@
     <link rel="apple-touch-icon" href="/connectify.svg" />
     <link rel="mask-icon" href="/connectify-mono.svg" color="#502d55" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Without these, adding Connectify to an iPhone home screen still opens it inside
+         Safari's own chrome (address bar, tab switcher) instead of as a standalone app.
+         The manifest's display:standalone alone isn't reliably honored on iOS. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Connectify" />
     <link rel="preconnect" href="https://www.youtube.com" />
     <!-- SEO_HEAD -->
     <title>Connectify — Listen together</title>

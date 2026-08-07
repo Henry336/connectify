@@ -411,7 +411,7 @@ export async function addLibraryTracks(code: string, items: InsertableItem[]) {
   return insertCreditedTracks(code, unique, { addedBy: "Connectify Library", addedByUserId: "library-seed" });
 }
 
-const LIBRARY_ROOM_CODE = "LIBRAY";
+export const LIBRARY_ROOM_CODE = "LIBRAY";
 
 // The permanent, non-joinable system room whose discoverable tracks make up the
 // Connectify Library growth pool. Created once, locked, and never assigned a usable

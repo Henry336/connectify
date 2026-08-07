@@ -5,7 +5,7 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, createRoomCode, ensureLibraryRoom, fairQueueOrder, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, createRoomCode, ensureLibraryRoom, fairQueueOrder, LIBRARY_ROOM_CODE, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { fetchPlaylistItems, libraryCoverage, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
 import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
@@ -109,6 +109,138 @@ app.get("/api/metrics/dashboard", (req, res) => {
   });
   res.json({ windowHours: 24, metrics });
 });
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+
+function renderLibraryStatusPage(refreshUrl: string, data: {
+  totalTracks: number;
+  last24h: number;
+  last7d: number;
+  dailyCounts: Array<{ day: Date; count: number }>;
+  recentQueries: Array<{ query: string; lastSearchedAt: Date | null; exhausted: boolean }>;
+  queriesTried: number;
+  queriesTotal: number;
+  queriesExhausted: number;
+  lastBatchAt: Date | null;
+  seedKeyConfigured: boolean;
+}) {
+  const fmtDate = (value: Date | null) => value ? new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "Never";
+  const hoursSince = data.lastBatchAt ? (Date.now() - new Date(data.lastBatchAt).getTime()) / 3_600_000 : Infinity;
+  // The batch runs hourly; anything past ~26h means either the service has been asleep
+  // (Render free tier) or the job is erroring silently.
+  const freshnessLabel = !data.lastBatchAt ? "Hasn't run yet" : hoursSince < 2 ? "Running normally" : hoursSince < 26 ? "A bit behind schedule" : "Stalled — check Render logs";
+  const freshnessColor = !data.lastBatchAt ? "#897c8b" : hoursSince < 2 ? "#83c8a5" : hoursSince < 26 ? "#e9c45a" : "#ef8796";
+
+  const maxDaily = Math.max(1, ...data.dailyCounts.map((day) => day.count));
+  const dailyRows = data.dailyCounts.map((day) => `
+    <div class="bar-row">
+      <span class="bar-label">${escapeHtml(new Date(day.day).toLocaleDateString("en-US", { month: "short", day: "numeric" }))}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, Math.round(day.count / maxDaily * 100))}%"></div></div>
+      <span class="bar-count">${day.count}</span>
+    </div>`).join("");
+
+  const queryRows = data.recentQueries.map((row) => `
+    <tr><td>${escapeHtml(row.query)}</td><td>${fmtDate(row.lastSearchedAt)}</td><td>${row.exhausted ? "Exhausted" : "Active"}</td></tr>`).join("");
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Connectify Library status</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 18px 60px; background: #0f0a12; color: #f8f4e9; font-family: -apple-system, "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  .sub { color: #897c8b; font-size: 13px; margin: 0 0 26px; }
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  .stat { flex: 1; min-width: 130px; padding: 15px 17px; border: 1px solid rgba(248,244,233,.11); border-radius: 14px; background: #1c1420; }
+  .stat .n { font-size: 26px; font-weight: 800; color: #f6dbc0; }
+  .stat .l { font-size: 11.5px; color: #b6a9b7; margin-top: 4px; }
+  .panel { padding: 17px 19px; border: 1px solid rgba(248,244,233,.11); border-radius: 14px; background: #1c1420; margin-bottom: 16px; }
+  .panel h2 { font-size: 12.5px; margin: 0 0 13px; text-transform: uppercase; letter-spacing: .08em; color: #c57da3; }
+  .freshness { display: flex; align-items: center; gap: 9px; font-size: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: ${freshnessColor}; flex: 0 0 auto; }
+  .bar-row { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 4px 0; }
+  .bar-label { width: 52px; color: #897c8b; flex: 0 0 auto; }
+  .bar-track { flex: 1; height: 8px; border-radius: 5px; background: rgba(248,244,233,.08); overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg,#935073,#c57da3); border-radius: 5px; }
+  .bar-count { width: 26px; text-align: right; color: #f8f4e9; flex: 0 0 auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: #897c8b; font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; padding-bottom: 8px; }
+  td { padding: 7px 0; border-top: 1px solid rgba(248,244,233,.08); color: #f8f4e9; }
+  .refresh { display: inline-block; margin-top: 4px; color: #c57da3; font-size: 13px; text-decoration: none; }
+  .config { font-size: 13px; color: #b6a9b7; line-height: 1.7; }
+  .config b { color: #f8f4e9; }
+</style></head>
+<body><div class="wrap">
+  <h1>Connectify Library status</h1>
+  <p class="sub">Private diagnostic page — not linked anywhere in the app, and not indexed.</p>
+
+  <div class="stat-row">
+    <div class="stat"><div class="n">${data.totalTracks.toLocaleString()}</div><div class="l">Total songs in the Library</div></div>
+    <div class="stat"><div class="n">${data.last24h}</div><div class="l">Added in the last 24h</div></div>
+    <div class="stat"><div class="n">${data.last7d}</div><div class="l">Added in the last 7 days</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Seeding job</h2>
+    <div class="freshness"><span class="dot"></span><span>${freshnessLabel} &middot; last batch ${fmtDate(data.lastBatchAt)}</span></div>
+    <p class="config">
+      Dedicated seed key: <b>${data.seedKeyConfigured ? "configured" : "not set — sharing live search's quota"}</b><br />
+      Genres tried so far: <b>${data.queriesTried} / ${data.queriesTotal}</b> (${data.queriesExhausted} fully mined out)
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Growth, last 14 days</h2>
+    ${dailyRows || '<p class="config">No songs added yet.</p>'}
+  </div>
+
+  <div class="panel">
+    <h2>Most recently searched genres</h2>
+    <table><thead><tr><th>Query</th><th>Last searched</th><th>Status</th></tr></thead><tbody>${queryRows || '<tr><td colspan="3">Nothing searched yet.</td></tr>'}</tbody></table>
+  </div>
+
+  <a class="refresh" href="${escapeHtml(refreshUrl)}">Refresh</a>
+</div></body></html>`;
+}
+
+app.get("/api/metrics/library", asyncRoute(async (req, res) => {
+  const expected = process.env.METRICS_ADMIN_TOKEN;
+  const provided = req.get("authorization") === `Bearer ${expected}` || (typeof req.query.token === "string" && req.query.token === expected);
+  // Same 404-not-401 pattern as /api/metrics/dashboard: an unauthenticated request should
+  // look identical to hitting a route that doesn't exist.
+  if (!expected || !provided) return res.status(404).json({ error: "Not found." });
+
+  const room = await prisma.room.findUnique({ where: { code: LIBRARY_ROOM_CODE }, select: { id: true } });
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000);
+
+  const [totalTracks, last24h, last7d, dailyCountsDesc, seedRows, lastBatch, queriesTried, queriesExhausted] = room ? await Promise.all([
+    prisma.track.count({ where: { roomId: room.id, removedAt: null } }),
+    prisma.track.count({ where: { roomId: room.id, removedAt: null, createdAt: { gte: dayAgo } } }),
+    prisma.track.count({ where: { roomId: room.id, removedAt: null, createdAt: { gte: weekAgo } } }),
+    prisma.$queryRaw<Array<{ day: Date; count: bigint }>>`SELECT date_trunc('day', "createdAt") as day, count(*)::int as count FROM "Track" WHERE "roomId" = ${room.id} AND "removedAt" IS NULL GROUP BY day ORDER BY day DESC LIMIT 14`,
+    prisma.librarySeed.findMany({ where: { lastSearchedAt: { not: null } }, orderBy: { lastSearchedAt: "desc" }, take: 12 }),
+    prisma.librarySeed.aggregate({ _max: { lastSearchedAt: true } }),
+    prisma.librarySeed.count({ where: { lastSearchedAt: { not: null } } }),
+    prisma.librarySeed.count({ where: { exhausted: true } }),
+  ]) : [0, 0, 0, [], [], { _max: { lastSearchedAt: null } }, 0, 0];
+
+  res.type("html").send(renderLibraryStatusPage(req.originalUrl, {
+    totalTracks,
+    last24h,
+    last7d,
+    dailyCounts: [...dailyCountsDesc].reverse().map((row) => ({ day: row.day, count: Number(row.count) })),
+    recentQueries: seedRows,
+    queriesTried,
+    queriesTotal: SEED_QUERIES.length,
+    queriesExhausted,
+    lastBatchAt: lastBatch._max.lastSearchedAt,
+    seedKeyConfigured: Boolean(process.env.YOUTUBE_SEED_API_KEY),
+  }));
+}));
 
 app.post("/api/rooms", asyncRoute(async (req, res) => {
   const input = z.object({
