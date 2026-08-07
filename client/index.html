@@ -12,7 +12,12 @@
          background meant for in-app use, which is exactly what produced the visible
          whitespace/halo around the home-screen icon; SVG rasterization for this specific
          tag is also inconsistent across iOS versions, which was the separate blurriness. -->
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The ?v= query string exists purely to bust iOS Safari's own touch-icon cache,
+         which does not reliably invalidate on a normal page reload -- an already-added
+         home screen icon or a stale "Add to Home Screen" preview can keep referencing
+         the old file at the old URL indefinitely otherwise. Bump the number whenever
+         this specific asset changes again. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
     <link rel="mask-icon" href="/connectify-mono.svg" color="#502d55" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <!-- Without these, adding Connectify to an iPhone home screen still opens it inside
