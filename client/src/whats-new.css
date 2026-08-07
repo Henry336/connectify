@@ -253,7 +253,11 @@
 
 @media (max-width: 560px) {
   .whats-new { padding: 0; }
-  .whats-new-panel { width: 100vw; height: 100vh; border-radius: 0; border: none; }
+  /* 100vh on mobile Safari/Chrome measures the largest possible viewport (address bar
+     collapsed), not what's actually visible -- it pushed the footer and its button
+     below the fold whenever the browser chrome was showing. 100dvh tracks the real
+     visible area and updates live as the chrome shows or hides. */
+  .whats-new-panel { width: 100vw; height: 100dvh; border-radius: 0; border: none; }
   .whats-new-head, .whats-new-scroll, .whats-new-foot { padding-left: 18px; padding-right: 18px; }
 }
 
