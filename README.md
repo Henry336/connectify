@@ -128,6 +128,12 @@ Set `YOUTUBE_SEED_API_KEY` to a **second** Google Cloud API key (same setup as a
 
 Note that 2,500 is *candidates fetched*, not net new library rows: results are deduplicated against everything already in the library, so the net daily gain naturally tapers as coverage grows. That is the intended behavior—the gap-fill ranking keeps steering the budget toward whichever styles are still thin.
 
+To check the job at any time, set `METRICS_ADMIN_TOKEN` on Render to a long random value and bookmark:
+
+`https://<your-render-service>/api/metrics/library?token=<METRICS_ADMIN_TOKEN>`
+
+The private, no-index status page shows whether the dedicated seed key is configured, the last batch time, songs added in the last 24 hours and 7 days, fourteen-day growth, and the most recently searched catalog queries. A healthy awake service normally shows a batch within the last two hours; Render Free sleep can make that later. The same evidence is available in Render logs by filtering for `"type":"library_seed"`. A successful batch logs `queriesRun` and `tracksAdded`; `tracksAdded: 0` can be normal when every fetched result was already known.
+
 The PWA share target appears after installing Connectify from a compatible browser/OS. Share a YouTube link to Connectify, then choose one of the rooms previously visited on that device.
 
 ## Architecture

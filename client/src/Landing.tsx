@@ -125,7 +125,7 @@ export function Landing() {
         <button className="primary wide" disabled={busy}>{waking ? "Waking Connectify…" : busy ? "Tuning in…" : mode === "create" ? "Create listening room" : "Join the room"}<ArrowRight size={18} /></button>
         {recentRooms.length > 0 && <div className="recent-rooms">
           <span>Return to a room <small>{recentRooms.length > 3 ? `3 of ${recentRooms.length}` : recentRooms.length}</small></span>
-          <div className="recent-room-list">{recentRooms.slice(0, 3).map((room) => <a key={room.code} href={`/room/${room.code}`}>
+          <div className="recent-room-list">{recentRooms.map((room) => <a key={room.code} href={`/room/${room.code}`}>
             <i><Radio /></i>
             <div className="recent-room-copy">
               <div><strong>{room.name}</strong><code>{room.code}</code></div>

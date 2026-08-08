@@ -5,10 +5,10 @@ import express from "express";
 import helmet from "helmet";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
-import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, createRoomCode, ensureLibraryRoom, fairQueueOrder, LIBRARY_ROOM_CODE, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomPlaybackState, roomQueueState, roomSnapshot } from "./room-service.js";
+import { addAutoplayTracks, addLibraryTracks, advanceRoom, autoplayOutlook, createRoomCode, ensureLibraryRoom, fairQueueOrder, LIBRARY_ROOM_CODE, normalizePositions, prisma, refillAutoplay, roomActivityPage, roomHistoryPage, roomMembersPage, roomMessagesPage, roomQueueState, roomSnapshot } from "./room-service.js";
 import { addTrackDenial, advanceAllowed, artistAllowed, endedPlaybackAllowed, joinRoomDenial, publicJoinFailure, trackChangeAllowed } from "./room-policy.js";
 import { fetchPlaylistItems, libraryCoverage, searchConnectifyLibrary, searchYouTube, type SearchItem } from "./search-service.js";
-import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
+import { discoveryQueries, pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
 import { pickSeedTargets, preselectByRotation, SEED_QUERIES } from "./library-seed.js";
 import { getPlaylistId, isMixPlaylist, resolveTrack } from "./youtube.js";
 
@@ -317,7 +317,7 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
     prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId: input.userId } } }),
     prisma.track.count({ where: { roomId: room.id, removedAt: null, playedAt: null } }),
     isHost ? Promise.resolve(0) : prisma.track.count({ where: { roomId: room.id, addedByUserId: input.userId, playedAt: null, removedAt: null, ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}) } }),
-    prisma.track.findFirst({ where: { roomId: room.id, providerId: metadata.providerId, removedAt: null, playedAt: null }, select: { title: true } }),
+    prisma.track.findFirst({ where: { roomId: room.id, providerId: metadata.providerId, removedAt: null, playedAt: null }, select: { id: true, title: true, addedByUserId: true, autoplayReason: true } }),
     room.partyMode === "discovery" ? prisma.track.findMany({ where: { roomId: room.id }, select: { artist: true } }) : Promise.resolve([]),
     prisma.track.aggregate({ where: { roomId: room.id, removedAt: null }, _max: { position: true } }),
     room.currentTrackId ? prisma.track.findFirst({ where: { id: room.currentTrackId, removedAt: null, playedAt: null }, select: { id: true } }) : Promise.resolve(null),
@@ -331,7 +331,8 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
     if (operation.result) return res.status(200).json(operation.result);
     return res.status(202).json({ pending: true, operationId: input.operationId });
   }
-  if (duplicate) {
+  const duplicateIsReplaceableAutoplay = duplicate && duplicate.id !== room.currentTrackId && (duplicate.addedByUserId === "autopilot" || Boolean(duplicate.autoplayReason));
+  if (duplicate && !duplicateIsReplaceableAutoplay) {
     await abandonOperation(input.operationId);
     return res.status(409).json({ error: `“${duplicate.title}” is already playing or in the queue.` });
   }
@@ -342,6 +343,17 @@ app.post("/api/rooms/:code/tracks", asyncRoute(async (req, res) => {
   const playNext = Boolean(room.currentTrackId) && input.placement === "next" && (isHost || room.guestsCanControl);
   try {
     const track = await prisma.$transaction(async (tx) => {
+      const humanQueueResumedAt = new Date();
+      await tx.track.updateMany({
+        where: {
+          roomId: room.id,
+          removedAt: null,
+          playedAt: null,
+          ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}),
+          OR: [{ addedByUserId: "autopilot" }, { autoplayReason: { not: null } }],
+        },
+        data: { removedAt: humanQueueResumedAt, removedBy: "human-queue-resumed", playNext: false },
+      });
       if (playNext) await tx.track.updateMany({ where: { roomId: room.id, removedAt: null }, data: { playNext: false } });
       const created = await tx.track.create({ data: { roomId: room.id, position: (maxPosition._max.position ?? -1) + 1, addedBy: input.addedBy, addedByUserId: input.userId, playNext, ...metadata } });
       await tx.room.update({
@@ -382,7 +394,7 @@ app.post("/api/rooms/:code/playlist", asyncRoute(async (req, res) => {
     prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId: input.userId } } }),
     prisma.track.count({ where: { roomId: room.id, removedAt: null, playedAt: null } }),
     isHost ? Promise.resolve(0) : prisma.track.count({ where: { roomId: room.id, addedByUserId: input.userId, playedAt: null, removedAt: null, ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}) } }),
-    prisma.track.findMany({ where: { roomId: room.id, removedAt: null, playedAt: null }, select: { providerId: true, artist: true } }),
+    prisma.track.findMany({ where: { roomId: room.id, removedAt: null, playedAt: null }, select: { id: true, providerId: true, artist: true, addedByUserId: true, autoplayReason: true } }),
     prisma.track.aggregate({ where: { roomId: room.id, removedAt: null }, _max: { position: true } }),
     room.currentTrackId ? prisma.track.findFirst({ where: { id: room.currentTrackId, removedAt: null, playedAt: null }, select: { id: true } }) : Promise.resolve(null),
   ]);
@@ -399,8 +411,9 @@ app.post("/api/rooms/:code/playlist", asyncRoute(async (req, res) => {
   }
   try {
     const items = await fetchPlaylistItems(playlistId);
-    const queued = new Set(existingTracks.map((track) => track.providerId));
-    const artists = existingTracks.map((track) => track.artist);
+    const manuallyOccupiedTracks = existingTracks.filter((track) => track.id === room.currentTrackId || (track.addedByUserId !== "autopilot" && !track.autoplayReason));
+    const queued = new Set(manuallyOccupiedTracks.map((track) => track.providerId));
+    const artists = manuallyOccupiedTracks.map((track) => track.artist);
     const importable: typeof items = [];
     for (const item of items) {
       if (importable.length >= allowance) break;
@@ -415,6 +428,16 @@ app.post("/api/rooms/:code/playlist", asyncRoute(async (req, res) => {
     }
     let position = (maxPosition._max.position ?? -1) + 1;
     const created = await prisma.$transaction(async (tx) => {
+      await tx.track.updateMany({
+        where: {
+          roomId: room.id,
+          removedAt: null,
+          playedAt: null,
+          ...(room.currentTrackId ? { NOT: { id: room.currentTrackId } } : {}),
+          OR: [{ addedByUserId: "autopilot" }, { autoplayReason: { not: null } }],
+        },
+        data: { removedAt: new Date(), removedBy: "human-queue-resumed", playNext: false },
+      });
       const rows = [];
       for (const item of importable) {
         rows.push(await tx.track.create({ data: { roomId: room.id, url: item.url, provider: "youtube", providerId: item.providerId, title: item.title, artist: item.artist, thumbnail: item.thumbnail, addedBy: input.addedBy, addedByUserId: input.userId, position: position++ } }));
@@ -623,15 +646,16 @@ setTimeout(() => void runLibrarySeedBatch(), 30_000).unref();
 
 // Per-room standby pool of Smart Discovery candidates, refreshed at most every 30 minutes.
 // Backed by the shared search cache, so repeated refills rarely spend YouTube quota.
-const discoveryPools = new Map<string, { expiresAt: number; seed: string; items: SearchItem[] }>();
-async function discoveryPool(code: string, seeds: string[]) {
-  if (!process.env.YOUTUBE_API_KEY || !seeds.length) return null;
+const discoveryPools = new Map<string, { expiresAt: number; signature: string; seed: string; items: SearchItem[] }>();
+async function discoveryPool(code: string, queries: string[]) {
+  if (!process.env.YOUTUBE_API_KEY || !queries.length) return null;
+  const signature = queries.join("|").toLowerCase();
   const cached = discoveryPools.get(code);
-  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (cached && cached.expiresAt > Date.now() && cached.signature === signature) return cached;
   try {
-    const seed = seeds[Math.floor(Math.random() * seeds.length)];
-    const result = await searchYouTube(`${seed} songs`);
-    const pool = { expiresAt: Date.now() + 30 * 60_000, seed, items: result.items };
+    const seed = queries[Math.floor(Math.random() * queries.length)];
+    const result = await searchYouTube(seed);
+    const pool = { expiresAt: Date.now() + 30 * 60_000, signature, seed, items: result.items };
     discoveryPools.set(code, pool);
     return pool;
   } catch (error) {
@@ -656,11 +680,12 @@ async function runAutoplayRefill(code: string) {
     let suggested: Array<{ roomId: string; title: string }> = [];
     const outlook = await autoplayOutlook(code);
     if (outlook && outlook.need > 0 && outlook.freshness > 0) {
-      const pool = await discoveryPool(code, topArtists(outlook.historySignals));
+      const roomArtists = topArtists(outlook.historySignals, 6);
+      const pool = await discoveryPool(code, discoveryQueries(outlook.historySignals));
       if (pool) {
         const { fresh } = splitAutoplay(outlook.need, outlook.freshness, pool.items.length > 0);
-        const picks = pickDiscovery(pool.items, outlook.excludeProviderIds, fresh, outlook.upcomingArtists);
-        if (picks.length) suggested = await addAutoplayTracks(code, picks, `Because this room played ${pool.seed}`);
+        const picks = pickDiscovery(pool.items, outlook.excludeProviderIds, fresh, [...outlook.upcomingArtists, ...roomArtists]);
+        if (picks.length) suggested = await addAutoplayTracks(code, picks, `Inspired by this room's listening history`);
       }
     }
     const revived = await refillAutoplay(code);
@@ -849,8 +874,8 @@ io.on("connection", (socket) => {
         await tx.track.update({ where: { id: track.id }, data: { playedAt: null } });
       }
     });
-    const state = await roomPlaybackState(code);
-    io.to(code).emit("room:playback", state);
+    const state = await roomQueueState(code);
+    io.to(code).emit("room:queue", state);
     reply({ ok: true, state });
     void scheduleRoomEnd(code);
     console.log(JSON.stringify({ type: "socket_timing", event: "playback:set", durationMs: Number((performance.now() - startedAt).toFixed(1)) }));

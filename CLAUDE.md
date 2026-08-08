@@ -140,6 +140,25 @@ Never commit real values, and never paste a secret into a chat with an AI tool.
 Newest first. Add an entry whenever meaningful work lands: date, tool, what changed,
 current state.
 
+### 2026-08-09 — Codex (fair queue and Smart Autoplay follow-up)
+
+- Persistent-room history now renders every saved room inside a fixed three-row scrolling
+  viewport; the previous `slice(0, 3)` accidentally made older rooms unreachable.
+- Direct track selection now broadcasts the revisioned queue state after marking the old
+  current track played, so every client recomputes the same fair contributor rotation.
+- Smart Autoplay is now strictly subordinate to human contributions: it stays behind all
+  human tracks, only refills at two or fewer upcoming tracks after three quiet minutes,
+  labels revived history as autoplay, and removes upcoming autoplay rows transactionally
+  when a listener adds a song or playlist. A final quiet-window recheck closes the external
+  YouTube-search race.
+- Discovery now derives up to six taste signals from the room's complete track history,
+  searches related-artist pairs, invalidates its cache when those signals change, and
+  prefers artists outside both the upcoming queue and the room's strongest artists.
+- Documented the protected Library status page and Render log check. Production `/ready`
+  responded successfully and the public library search returned populated results; exact
+  last-run verification remains intentionally protected by `METRICS_ADMIN_TOKEN`.
+- Full production build and all 55 server tests pass. No schema migration is required.
+
 ### 2026-08-09 — Codex
 
 - Refined the landing page's persistent-room history to present only the three most

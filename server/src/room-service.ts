@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { autoplayRefillNeed } from "./discovery.js";
 import { normalizeSongKey } from "./song-key.js";
 
 export const prisma = new PrismaClient({
@@ -26,9 +27,11 @@ export type FairTrack = {
   votes: number;
   playedAt?: Date | string | null;
   playNext?: boolean;
+  autoplayReason?: string | null;
 };
 
-const contributorKey = (track: FairTrack) => track.addedByUserId || `name:${track.addedBy.toLowerCase()}`;
+const isAutoplayTrack = (track: FairTrack) => track.addedByUserId === "autopilot" || Boolean(track.autoplayReason);
+const contributorKey = (track: FairTrack) => isAutoplayTrack(track) ? "autopilot" : track.addedByUserId || `name:${track.addedBy.toLowerCase()}`;
 
 export function fairQueueOrder(tracks: FairTrack[], currentTrackId: string | null) {
   const current = tracks.find((track) => track.id === currentTrackId);
@@ -47,6 +50,9 @@ export function fairQueueOrder(tracks: FairTrack[], currentTrackId: string | nul
   for (const group of groups.values()) group.sort((a, b) => b.votes - a.votes || a.position - b.position);
 
   const contributorOrder = [...groups.entries()].sort(([keyA, tracksA], [keyB, tracksB]) => {
+    const autoplayA = tracksA.every(isAutoplayTrack);
+    const autoplayB = tracksB.every(isAutoplayTrack);
+    if (autoplayA !== autoplayB) return autoplayA ? 1 : -1;
     if (keyA === currentContributor && keyB !== currentContributor) return 1;
     if (keyB === currentContributor && keyA !== currentContributor) return -1;
     return Math.min(...tracksA.map((track) => track.position)) - Math.min(...tracksB.map((track) => track.position));
@@ -210,11 +216,6 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
   if (!current) return false;
   const played = room.tracks.filter((track) => track.id !== current.id && track.playedAt).sort((a, b) => Number(b.playedAt) - Number(a.playedAt));
   let targetId = direction === -1 ? played[0]?.id : fairQueueOrder(room.tracks, current.id)[0];
-  let resetCycle = false;
-  if (direction === 1 && !targetId && room.autopilotEnabled) {
-    resetCycle = true;
-    targetId = fairQueueOrder(room.tracks.map((track) => ({ ...track, playedAt: track.autoplayBlocked ? track.playedAt : null })), current.id)[0] || current.id;
-  }
   if (direction === -1 && !targetId) targetId = current.id;
 
   const now = new Date();
@@ -226,7 +227,6 @@ export async function advanceRoom(code: string, expectedTrackId: string, directi
         : { isPlaying: false, playbackPosition: 0, startedAt: null, revision: { increment: 1 } },
     });
     if (updated.count !== 1) return false;
-    if (resetCycle) await tx.track.updateMany({ where: { roomId: room.id, removedAt: null, autoplayBlocked: false }, data: { playedAt: null } });
     if (targetId && targetId !== current.id) {
       if (direction === 1) await tx.track.update({ where: { id: current.id }, data: { playedAt: now } });
       await tx.track.update({ where: { id: targetId }, data: { playedAt: null } });
@@ -287,7 +287,9 @@ export async function refillAutoplay(code: string) {
   });
   if (!room || !room.autopilotEnabled || !room.currentTrackId) return null;
   const upcoming = fairQueueOrder(room.tracks, room.currentTrackId);
-  const need = room.autoplayMinBuffer - upcoming.length;
+  const humanTracks = room.tracks.filter((track) => !track.autoplayReason && track.addedByUserId !== "autopilot" && track.addedByUserId !== "library-seed");
+  const lastHumanAddedAt = humanTracks.reduce<Date | null>((latest, track) => !latest || track.createdAt > latest ? track.createdAt : latest, null);
+  const need = autoplayRefillNeed({ upcomingCount: upcoming.length, targetBuffer: room.autoplayMinBuffer, lastHumanAddedAt });
   if (need <= 0) return null;
   const byId = new Map(room.tracks.map((track) => [track.id, track]));
   const upcomingArtists = upcoming.map((id) => byId.get(id)?.artist || "").filter(Boolean);
@@ -297,7 +299,7 @@ export async function refillAutoplay(code: string) {
   const committed = await prisma.$transaction(async (tx) => {
     const bumped = await tx.room.updateMany({ where: { id: room.id, revision: room.revision }, data: { revision: { increment: 1 } } });
     if (bumped.count !== 1) return false;
-    await tx.track.updateMany({ where: { id: { in: reviveIds }, roomId: room.id, autoplayBlocked: false }, data: { playedAt: null } });
+    await tx.track.updateMany({ where: { id: { in: reviveIds }, roomId: room.id, autoplayBlocked: false }, data: { playedAt: null, playNext: false, autoplayReason: "From this room's history" } });
     return true;
   });
   if (!committed) return null;
@@ -317,7 +319,7 @@ export async function autoplayOutlook(code: string) {
       currentTrackId: true,
       tracks: {
         orderBy: { position: "asc" },
-        select: { id: true, providerId: true, artist: true, votes: true, position: true, playedAt: true, removedAt: true, playNext: true, addedBy: true, addedByUserId: true },
+        select: { id: true, providerId: true, title: true, artist: true, votes: true, position: true, playedAt: true, removedAt: true, playNext: true, addedBy: true, addedByUserId: true, autoplayReason: true, createdAt: true },
       },
     },
   });
@@ -325,14 +327,16 @@ export async function autoplayOutlook(code: string) {
   const active = room.tracks.filter((track) => !track.removedAt);
   const upcoming = fairQueueOrder(active, room.currentTrackId);
   const byId = new Map(active.map((track) => [track.id, track]));
+  const humanTracks = room.tracks.filter((track) => !track.autoplayReason && track.addedByUserId !== "autopilot" && track.addedByUserId !== "library-seed");
+  const lastHumanAddedAt = humanTracks.reduce<Date | null>((latest, track) => !latest || track.createdAt > latest ? track.createdAt : latest, null);
   return {
     roomId: room.id,
-    need: Math.max(0, room.autoplayMinBuffer - upcoming.length),
+    need: autoplayRefillNeed({ upcomingCount: upcoming.length, targetBuffer: room.autoplayMinBuffer, lastHumanAddedAt }),
     freshness: room.autoplayFreshness,
     upcomingArtists: upcoming.map((id) => byId.get(id)?.artist || "").filter(Boolean),
     // Anything the room has ever had — queued, played, or removed — is off-limits for suggestions.
     excludeProviderIds: new Set(room.tracks.map((track) => track.providerId)),
-    historySignals: active.map(({ artist, votes, playedAt }) => ({ artist, votes, playedAt })),
+    historySignals: room.tracks.map(({ title, artist, votes, playedAt }) => ({ title, artist, votes, playedAt })),
   };
 }
 
@@ -380,8 +384,12 @@ async function insertCreditedTracks(code: string, items: InsertableItem[], credi
 
 // Inserts Smart Discovery suggestions as normal queue rows credited to DJ Autopilot, so
 // they inherit voting, removal, reordering, and fair-queue behavior for free.
-export function addAutoplayTracks(code: string, items: InsertableItem[], reason: string) {
-  return insertCreditedTracks(code, items, { addedBy: "DJ Autopilot", addedByUserId: "autopilot", autoplayReason: reason });
+export async function addAutoplayTracks(code: string, items: InsertableItem[], reason: string) {
+  // Discovery involves an external request. Recheck the quiet-window guard immediately
+  // before inserting so a human contribution made while YouTube was answering wins.
+  const outlook = await autoplayOutlook(code);
+  if (!outlook?.need) return [];
+  return insertCreditedTracks(code, items.slice(0, outlook.need), { addedBy: "DJ Autopilot", addedByUserId: "autopilot", autoplayReason: reason });
 }
 
 // Inserts automated Connectify Library growth results the same way, credited separately

@@ -25,3 +25,18 @@ test("Play Next overrides contributor rotation exactly once", () => {
   const tracks = [track("current", "a", 0), track("fair-first", "b", 1), track("pinned", "a", 2, 0, null, true), track("later", "c", 3)];
   assert.deepEqual(fairQueueOrder(tracks, "current"), ["pinned", "fair-first", "later"]);
 });
+
+test("autoplay stays behind every human contribution", () => {
+  const tracks = [
+    track("current", "a", 0),
+    { ...track("auto", "autopilot", 1), autoplayReason: "Inspired by room history" },
+    track("b-1", "b", 2),
+    track("c-1", "c", 3),
+  ];
+  assert.deepEqual(fairQueueOrder(tracks, "current"), ["b-1", "c-1", "auto"]);
+});
+
+test("directly selected contributor rotates behind the other listeners", () => {
+  const tracks = [track("a-played", "a", 0, 0, new Date()), track("b-selected", "b", 1), track("b-2", "b", 2), track("a-next", "a", 3)];
+  assert.deepEqual(fairQueueOrder(tracks, "b-selected"), ["a-next", "b-2"]);
+});

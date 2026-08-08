@@ -175,9 +175,15 @@ textarea { font: inherit; }
 .recent-room-list {
   display: grid;
   gap: 7px;
+  grid-auto-rows: 76px;
+  max-height: 242px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 5px;
+  scrollbar-gutter: stable;
 }
 .recent-room-list > a {
-  min-height: 68px;
+  height: 76px;
   padding: 10px 11px;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) 20px;

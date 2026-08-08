@@ -2,7 +2,22 @@
 // how to split a refill between familiar revivals and fresh finds, and which fresh
 // candidates to actually queue. Kept dependency-free so they stay unit-testable.
 
-export type ArtistSignal = { artist: string; votes: number; playedAt?: Date | string | null };
+export type ArtistSignal = { artist: string; votes: number; playedAt?: Date | string | null; title?: string };
+
+export const AUTOPLAY_TRIGGER_MAX_UPCOMING = 2;
+export const AUTOPLAY_IDLE_MS = 3 * 60_000;
+
+export function autoplayRefillNeed(input: {
+  upcomingCount: number;
+  targetBuffer: number;
+  lastHumanAddedAt?: Date | string | null;
+  now?: number;
+}) {
+  if (input.upcomingCount > AUTOPLAY_TRIGGER_MAX_UPCOMING) return 0;
+  const lastHumanAdded = input.lastHumanAddedAt ? new Date(input.lastHumanAddedAt).getTime() : 0;
+  if (lastHumanAdded && (input.now ?? Date.now()) - lastHumanAdded < AUTOPLAY_IDLE_MS) return 0;
+  return Math.max(0, Math.max(3, input.targetBuffer) - input.upcomingCount);
+}
 
 // Ranks the artists a room demonstrably cares about: every appearance counts, votes
 // count double, and a completed play adds one more.
@@ -14,6 +29,16 @@ export function topArtists(tracks: ArtistSignal[], limit = 3): string[] {
     scores.set(artist, (scores.get(artist) || 0) + 1 + track.votes * 2 + (track.playedAt ? 1 : 0));
   }
   return [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([artist]) => artist);
+}
+
+// Searches across pairs of the room's strongest signals instead of repeatedly asking
+// YouTube for one artist's catalogue. The "similar music" wording deliberately widens
+// results toward adjacent artists while retaining the room's accumulated taste.
+export function discoveryQueries(tracks: ArtistSignal[], limit = 6): string[] {
+  const artists = topArtists(tracks, limit);
+  if (!artists.length) return [];
+  if (artists.length === 1) return [`music similar to ${artists[0]}`];
+  return artists.map((artist, index) => `${artist} ${artists[(index + 1) % artists.length]} similar music`);
 }
 
 // Splits a refill of `need` tracks by the room's Familiar↔Fresh setting (0–100).

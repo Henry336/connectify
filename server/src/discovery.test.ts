@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
+import { AUTOPLAY_IDLE_MS, autoplayRefillNeed, discoveryQueries, pickDiscovery, splitAutoplay, topArtists } from "./discovery.js";
 
 test("top artists rank by appearances, votes, and completed plays", () => {
   const artists = topArtists([
@@ -14,6 +14,25 @@ test("top artists rank by appearances, votes, and completed plays", () => {
 
 test("top artists ignore the generic YouTube fallback artist", () => {
   assert.deepEqual(topArtists([{ artist: "YouTube", votes: 9, playedAt: new Date() }, { artist: "Ivy", votes: 0 }]), ["Ivy"]);
+});
+
+test("discovery queries blend the room's strongest artists instead of searching one catalogue", () => {
+  assert.deepEqual(discoveryQueries([
+    { artist: "JVKE", votes: 3 },
+    { artist: "Mitski", votes: 2 },
+    { artist: "Beach House", votes: 1 },
+  ], 3), [
+    "JVKE Mitski similar music",
+    "Mitski Beach House similar music",
+    "Beach House JVKE similar music",
+  ]);
+});
+
+test("autoplay waits for a small queue and a quiet contribution window", () => {
+  const now = Date.now();
+  assert.equal(autoplayRefillNeed({ upcomingCount: 3, targetBuffer: 4, lastHumanAddedAt: new Date(now - AUTOPLAY_IDLE_MS - 1), now }), 0);
+  assert.equal(autoplayRefillNeed({ upcomingCount: 2, targetBuffer: 4, lastHumanAddedAt: new Date(now - 1_000), now }), 0);
+  assert.equal(autoplayRefillNeed({ upcomingCount: 2, targetBuffer: 4, lastHumanAddedAt: new Date(now - AUTOPLAY_IDLE_MS - 1), now }), 2);
 });
 
 test("familiar-fresh split follows the freshness setting", () => {
