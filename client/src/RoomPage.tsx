@@ -306,7 +306,7 @@ export function RoomPage({ code }: { code: string }) {
             setJoinNotice("");
             setJoinErrorCode(null);
             setError("");
-            rememberRoom(received.code, received.name);
+            rememberRoom(received.code, received.name, received.createdAt);
             setRoom(received);
             setHasMoreChat(received.hasMoreMessages);
             setVotedTrackIds(new Set(result.votes || []));

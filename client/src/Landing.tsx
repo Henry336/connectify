@@ -3,17 +3,31 @@ import { ArrowRight, Headphones, History, Link2, ListMusic, Radio, Sparkles } fr
 import { api, waitForBackend } from "./api";
 import { DEFAULT_IDENTITY, getIdentity, getRecentRooms, saveHostToken, saveIdentity, type Identity, type RecentRoom } from "./identity";
 import { Brand } from "./Brand";
+import { randomRoomName } from "./name-generator";
 
 // Lazy so its stylesheet stays out of the prerender module graph, which runs in plain
 // Node and cannot load CSS -- same reason WhatsNew is lazy.
 const ChangelogHistory = lazy(() => import("./ChangelogHistory").then((module) => ({ default: module.ChangelogHistory })));
+
+const roomDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+function formatRoomDate(timestamp: number) {
+  return roomDateFormatter.format(new Date(timestamp));
+}
+
+function formatLastVisited(timestamp: number) {
+  const elapsedDays = Math.floor((Date.now() - timestamp) / 86_400_000);
+  if (elapsedDays <= 0) return "Opened today";
+  if (elapsedDays === 1) return "Opened yesterday";
+  return `Opened ${formatRoomDate(timestamp)}`;
+}
 
 export function Landing() {
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [identity, setIdentity] = useState<Identity>(DEFAULT_IDENTITY);
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [name, setName] = useState(DEFAULT_IDENTITY.name);
-  const [roomName, setRoomName] = useState("Friday night mix");
+  const [roomName, setRoomName] = useState("Midnight listening room");
   const [maxParticipants, setMaxParticipants] = useState(50);
   const [code, setCode] = useState("");
   const [mode, setMode] = useState<"create" | "join">("create");
@@ -25,6 +39,7 @@ export function Landing() {
     const savedIdentity = getIdentity();
     setIdentity(savedIdentity);
     setName(savedIdentity.name);
+    setRoomName(randomRoomName());
     setRecentRooms(getRecentRooms());
   }, []);
 
@@ -108,7 +123,17 @@ export function Landing() {
         </> : <label>Room code<input className="code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/[^a-z0-9]/gi, "").slice(0, 6))} minLength={6} maxLength={6} placeholder="ABC123" /></label>}
         {error && <p className="form-error">{error}</p>}
         <button className="primary wide" disabled={busy}>{waking ? "Waking Connectify…" : busy ? "Tuning in…" : mode === "create" ? "Create listening room" : "Join the room"}<ArrowRight size={18} /></button>
-        {recentRooms.length > 0 && <div className="recent-rooms"><span>Return to a room <small>{recentRooms.length}</small></span><div className="recent-room-list">{recentRooms.map((room) => <a key={room.code} href={`/room/${room.code}`}><i><Radio /></i><strong>{room.name}</strong><small>{room.code}</small><ArrowRight /></a>)}</div></div>}
+        {recentRooms.length > 0 && <div className="recent-rooms">
+          <span>Return to a room <small>{recentRooms.length > 3 ? `3 of ${recentRooms.length}` : recentRooms.length}</small></span>
+          <div className="recent-room-list">{recentRooms.slice(0, 3).map((room) => <a key={room.code} href={`/room/${room.code}`}>
+            <i><Radio /></i>
+            <div className="recent-room-copy">
+              <div><strong>{room.name}</strong><code>{room.code}</code></div>
+              <p><span>{room.createdAt ? `Created ${formatRoomDate(room.createdAt)}` : "Creation date syncs on your next visit"}</span><span>{formatLastVisited(room.lastVisited)}</span></p>
+            </div>
+            <ArrowRight />
+          </a>)}</div>
+        </div>}
       </form>
     </section>
     <footer><Brand compact /><nav aria-label="Connectify information"><a href="/features">Features</a><a href="/how-it-works">How it works</a><a href="/faq">FAQ</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav><span>Made for music and good company.</span></footer>

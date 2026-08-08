@@ -1,5 +1,5 @@
-const adjectives = ["Sunny", "Velvet", "Cosmic", "Mellow", "Lucky", "Electric"];
-const nouns = ["Otter", "Finch", "Fox", "Panda", "Koala", "Gecko"];
+import { randomGuestName } from "./name-generator";
+
 const avatars = ["🌻", "🪩", "🎧", "🌙", "🛼", "✨"];
 
 export type Identity = { userId: string; name: string; avatar: string };
@@ -14,7 +14,7 @@ export function getIdentity(): Identity {
   }
   const identity = {
     userId: crypto.randomUUID(),
-    name: `${adjectives[Math.floor(Math.random() * adjectives.length)]} ${nouns[Math.floor(Math.random() * nouns.length)]}`,
+    name: randomGuestName(),
     avatar: avatars[Math.floor(Math.random() * avatars.length)],
   };
   localStorage.setItem("connectify.identity", JSON.stringify(identity));
@@ -40,7 +40,7 @@ export function removeHostToken(code: string) {
   localStorage.removeItem(`connectify.host.${code.toUpperCase()}`);
 }
 
-export type RecentRoom = { code: string; name: string; lastVisited: number };
+export type RecentRoom = { code: string; name: string; lastVisited: number; createdAt?: number };
 
 export function getRecentRooms(): RecentRoom[] {
   if (typeof window === "undefined") return [];
@@ -53,17 +53,23 @@ export function getRecentRooms(): RecentRoom[] {
         && typeof room.code === "string"
         && /^[A-Z0-9]{6}$/i.test(room.code)
         && typeof room.name === "string"
-        && typeof room.lastVisited === "number",
+        && typeof room.lastVisited === "number"
+        && (room.createdAt === undefined || typeof room.createdAt === "number"),
       ))
       .sort((a, b) => b.lastVisited - a.lastVisited);
   }
   catch { return []; }
 }
 
-export function rememberRoom(code: string, name: string) {
-  const rooms = getRecentRooms().filter((room) => room.code !== code.toUpperCase());
+export function rememberRoom(code: string, name: string, createdAt?: string | number) {
+  const normalizedCode = code.toUpperCase();
+  const recentRooms = getRecentRooms();
+  const existing = recentRooms.find((room) => room.code === normalizedCode);
+  const parsedCreatedAt = typeof createdAt === "number" ? createdAt : createdAt ? Date.parse(createdAt) : Number.NaN;
+  const creationTime = Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : existing?.createdAt;
+  const rooms = recentRooms.filter((room) => room.code !== normalizedCode);
   localStorage.setItem("connectify.recentRooms", JSON.stringify([
-    { code: code.toUpperCase(), name, lastVisited: Date.now() },
+    { code: normalizedCode, name, lastVisited: Date.now(), ...(creationTime !== undefined ? { createdAt: creationTime } : {}) },
     ...rooms,
   ]));
 }

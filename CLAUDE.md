@@ -140,6 +140,18 @@ Never commit real values, and never paste a secret into a chat with an AI tool.
 Newest first. Add an entry whenever meaningful work lands: date, tool, what changed,
 current state.
 
+### 2026-08-09 — Codex
+
+- Refined the landing page's persistent-room history to present only the three most
+  recently opened rooms while preserving the complete local history. Each visible entry
+  now includes its room code, creation date, and last-opened date. Existing saved rooms
+  acquire their authoritative creation date the next time they are opened.
+- Replaced the fixed `Friday night mix` default with 36 equally weighted room names.
+  Guest identities now draw from 30 adjectives and 30 nouns using rejection-sampled
+  random indices, producing 900 equally selectable combinations without modulo bias.
+- Client production build and name-pool uniqueness/count checks pass. No database or API
+  changes were required.
+
 ### 2026-08-06 (evening) — Claude Code (Opus 5/Sonnet 5)
 
 - **Room video player restored to true 16:9** (`client/src/room/room-enhancements.css`).
